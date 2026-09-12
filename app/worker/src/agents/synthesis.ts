@@ -92,7 +92,7 @@ export function createSynthesisAgent(deps: SynthesisAgentDeps) {
       model: env.MODEL_NAME,
       apiKey: 'ollama',
       baseUrl: `${env.OLLAMA_BASE_URL.replace(/\/+$/, '')}/v1`,
-      defaultParameters: { max_tokens: env.MAX_TOKENS_PER_CALL, temperature: 0.2 },
+      defaultParameters: { max_completion_tokens: env.MAX_TOKENS_PER_CALL, temperature: 0.2 },
     }),
     tools: [createSubmitAnswerTool({ budget: deps.budget, jobId: deps.jobId, state: deps.state })],
   });

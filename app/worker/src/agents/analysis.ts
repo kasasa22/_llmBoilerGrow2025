@@ -38,7 +38,7 @@ export function createAnalysisAgent(deps: AnalysisAgentDeps) {
       model: env.MODEL_NAME,
       apiKey: 'ollama',
       baseUrl: `${env.OLLAMA_BASE_URL.replace(/\/+$/, '')}/v1`,
-      defaultParameters: { max_tokens: env.MAX_TOKENS_PER_CALL, temperature: 0.1 },
+      defaultParameters: { max_completion_tokens: env.MAX_TOKENS_PER_CALL, temperature: 0.1 },
     }),
     tools: [
       createExtractClaimTool({ budget: deps.budget, jobId: deps.jobId, state: deps.state }),
