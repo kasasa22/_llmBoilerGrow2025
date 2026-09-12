@@ -1,0 +1,39 @@
+{
+  "name": "bosmart-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Inngest AgentKit worker: multi-agent research Network (Research -> Analysis -> Synthesis) over self-hosted Ollama.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --enable-source-maps dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20 <21"
+  },
+  "dependencies": {
+    "@inngest/agent-kit": "^0.5.0",
+    "cheerio": "^1.0.0",
+    "express": "^4.19.2",
+    "inngest": "^3.24.0",
+    "ioredis": "^5.4.1",
+    "openai": "^4.68.0",
+    "p-limit": "^6.1.0",
+    "pino": "^9.4.0",
+    "tldts": "^6.1.50",
+    "ulid": "^2.3.0",
+    "undici": "^6.19.8",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.10",
+    "pino-pretty": "^11.2.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
