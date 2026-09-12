@@ -1,0 +1,97 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  inngest:
+    # Self-hosted single-binary in dev mode; serves the dashboard at :8288.
+    image: inngest/inngest:latest
+    ports:
+      - "8288:8288"
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-dev-event-key}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-signkey-dev-000000000000000000000000000000000000}
+    command: >
+      inngest start
+      --host 0.0.0.0
+      --port 8288
+      --sdk-url http://worker:3000/api/inngest
+    depends_on:
+      - redis
+
+  worker:
+    build:
+      context: ./app/worker
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      inngest:
+        condition: service_started
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: "3000"
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
+      MODEL_NAME: ${MODEL_NAME:-qwen3:8b}
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_APP_ID: bosmart-worker
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-dev-event-key}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-signkey-dev-000000000000000000000000000000000000}
+      RAG_ENABLED: ${RAG_ENABLED:-true}
+      RAG_EMBED_MODEL: ${RAG_EMBED_MODEL:-nomic-embed-text}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
+      DENIED_DOMAINS: ${DENIED_DOMAINS:-}
+    ports:
+      - "3000:3000"
+
+  flask:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      inngest:
+        condition: service_started
+    environment:
+      ENV: dev
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
+      MODEL_NAME: ${MODEL_NAME:-qwen3:8b}
+      INNGEST_APP_ID: bosmart-flask
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-dev-event-key}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-signkey-dev-000000000000000000000000000000000000}
+    ports:
+      - "8080:8080"
+
+volumes:
+  ollama:
