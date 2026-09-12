@@ -1,1 +1,22 @@
-civo_token = "YOUR CIVO API TOKEN"
+# Copy to terraform.tfvars and fill in.
+civo_token = "YOUR_CIVO_API_TOKEN"
+
+# Inngest self-hosted needs signing + event keys even in dev.
+# Generate once locally:
+#   openssl rand -hex 32   # event key
+#   openssl rand -hex 32   # signing key (prefix with "signkey-prod-" for prod)
+inngest_event_key   = ""
+inngest_signing_key = ""
+
+# Optional. Empty => webSearch falls back to DuckDuckGo HTML.
+tavily_api_key = ""
+
+# Images are pushed by CI; leave as defaults if not overriding via CI.
+# app_image_repository    = "ghcr.io/kasasa22/llm-boilerplate-app"
+# app_image_tag           = "latest"
+# worker_image_repository = "ghcr.io/kasasa22/llm-boilerplate-worker"
+# worker_image_tag        = "latest"
+
+# Empty allowed_domains = open web (demo posture). Production example:
+# allowed_domains = ["docs.civo.com", "kubernetes.io", "helm.sh", "github.com", "wikipedia.org", "inngest.com", "ollama.com"]
+# denied_domains  = ["pastebin.com", "paste.ee"]
