@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Research agent · BOSMART</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">◇</span>
+      <h1>Research agent</h1>
+      <span class="badge" title="Model in use">{{ model_name }}</span>
+      <span class="badge env-{{ env }}">{{ env }}</span>
+    </div>
+    <div class="brand-right">
+      <a href="https://github.com/kasasa22/_llmBoilerGrow2025" target="_blank" rel="noopener">source</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="ask">
+      <label for="query">Ask a research question</label>
+      <textarea id="query" rows="3" placeholder="e.g. What is the current status of Civo GPU node pricing in LON1?"></textarea>
+      <div class="controls">
+        <button id="submit" type="button">Send</button>
+        <span id="submit-hint" class="hint">Ctrl/⌘+Enter</span>
+        <span id="job-badge" class="badge job-badge hidden"></span>
+        <span id="trace-badge" class="badge trace-badge hidden" title="trace_id"></span>
+      </div>
+    </section>
+
+    <section class="timeline">
+      <h2>Live progress</h2>
+      <ol id="events" aria-live="polite"></ol>
+    </section>
+
+    <section class="answer hidden" id="answer-section">
+      <h2>Answer</h2>
+      <article id="answer" class="answer-body"></article>
+      <h3>Citations</h3>
+      <ol id="citations" class="citations"></ol>
+    </section>
+
+    <section class="banner error hidden" id="error-banner"></section>
+  </main>
+
+  <footer>
+    <span>Civo GPU · Inngest AgentKit · Ollama · SSE</span>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
