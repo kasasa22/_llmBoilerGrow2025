@@ -4,7 +4,7 @@ metadata:
   name: {{ .Release.Name }}
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}
-    app.kubernetes.io/component: flask-api
+    app.kubernetes.io/component: agentkit-worker
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
@@ -14,7 +14,7 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}
-        app.kubernetes.io/component: flask-api
+        app.kubernetes.io/component: agentkit-worker
     spec:
       containers:
         - name: {{ .Chart.Name }}
@@ -36,7 +36,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
-            failureThreshold: 3
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /healthz

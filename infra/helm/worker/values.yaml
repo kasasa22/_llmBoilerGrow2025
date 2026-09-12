@@ -1,0 +1,56 @@
+replicaCount: 1
+
+image:
+  # Overridden from Terraform (TF_VAR_worker_image_repository / _tag).
+  repository: ghcr.io/kasasa22/llm-boilerplate-worker
+  pullPolicy: Always
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 3000
+  targetPort: 3000
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "384Mi"
+  limits:
+    cpu: "1000m"
+    memory: "768Mi"
+
+env:
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "3000"
+  OLLAMA_BASE_URL: "http://ollama.ollama.svc.cluster.local:11434"
+  MODEL_NAME: "qwen3:8b"
+  REDIS_URL: "redis://redis-master.data.svc.cluster.local:6379/0"
+  INNGEST_APP_ID: "bosmart-worker"
+  INNGEST_BASE_URL: "http://inngest.inngest.svc.cluster.local:8288"
+  # network/router
+  NETWORK_MAX_CALLS: "12"
+  NETWORK_WALL_CLOCK_MS: "120000"
+  NETWORK_MIN_SOURCES: "3"
+  NETWORK_MIN_EVIDENCE: "4"
+  NETWORK_MIN_CLAIMS: "3"
+  NETWORK_MAX_ANALYSIS_ITERS: "2"
+  # RAG
+  RAG_ENABLED: "true"
+  RAG_EMBED_MODEL: "nomic-embed-text"
+  RAG_TOP_K: "6"
+  # budgets
+  MAX_TOOL_CALLS: "10"
+  MAX_FETCHES: "5"
+  MAX_SEARCH_QUERIES: "4"
+  MAX_CONTEXT_CHARS: "20000"
+  MAX_WALL_CLOCK_MS: "90000"
+  MAX_TOKENS_PER_CALL: "2000"
+  # allowlist (empty = open web for the demo; see D2)
+  ALLOWED_DOMAINS: ""
+  DENIED_DOMAINS: ""
+
+secrets:
+  INNGEST_EVENT_KEY: ""
+  INNGEST_SIGNING_KEY: ""
+  TAVILY_API_KEY: ""

@@ -4,10 +4,8 @@ metadata:
   name: {{ .Release.Name }}
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}
-    app.kubernetes.io/component: flask-api
+    app.kubernetes.io/component: orchestrator
   annotations:
-    # Civo LoadBalancer sits in front of Flask; SSE keep-alive comments
-    # every 15s are emitted by the app itself (see routes/stream.py).
     service.beta.kubernetes.io/civo-loadbalancer-algorithm: round_robin
 spec:
   type: {{ .Values.service.type }}

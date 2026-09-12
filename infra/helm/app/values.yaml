@@ -1,11 +1,42 @@
 replicaCount: 1
 
 image:
-  # customise this to your own repository
-  repository: ghcr.io/civo-learn/llm-boilerplate-app
+  # Overridden from Terraform (TF_VAR_app_image_repository / _tag).
+  repository: ghcr.io/kasasa22/llm-boilerplate-app
   pullPolicy: Always
   tag: "latest"
 
 service:
   type: LoadBalancer
   port: 80
+  targetPort: 8080
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "256Mi"
+  limits:
+    cpu: "800m"
+    memory: "512Mi"
+
+env:
+  # Non-secret runtime knobs; injected via ConfigMap.
+  ENV: "prod"
+  LOG_LEVEL: "info"
+  OLLAMA_BASE_URL: "http://ollama.ollama.svc.cluster.local:11434"
+  MODEL_NAME: "qwen3:8b"
+  REDIS_URL: "redis://redis-master.data.svc.cluster.local:6379/0"
+  INNGEST_APP_ID: "bosmart-flask"
+  INNGEST_BASE_URL: "http://inngest.inngest.svc.cluster.local:8288"
+  IDEMPOTENCY_TTL_SECONDS: "3600"
+  JOB_STATUS_TTL_SECONDS: "86400"
+
+secrets:
+  # Populated from Terraform vars in helm-app.tf. Left as strings here so the
+  # chart also renders standalone (helm template) for review.
+  INNGEST_EVENT_KEY: ""
+  INNGEST_SIGNING_KEY: ""
+
+serviceAccount:
+  create: false
+  name: ""

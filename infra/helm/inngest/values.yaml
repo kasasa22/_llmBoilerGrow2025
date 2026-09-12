@@ -1,0 +1,36 @@
+image:
+  repository: inngest/inngest
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  # LoadBalancer so the reviewer can open the Inngest dashboard mid-demo.
+  # Trade-off: OSS build has no built-in auth (see ADR-002 negative
+  # consequences). Set to ClusterIP if productionising.
+  type: LoadBalancer
+  port: 8288
+  targetPort: 8288
+
+# Worker service the Inngest single-binary polls for the function registry.
+sdkUrl: "http://worker.apps.svc.cluster.local:3000/api/inngest"
+
+persistence:
+  enabled: true
+  size: 2Gi
+  # Civo default StorageClass is "civo-volume"; leave blank to use the
+  # cluster default.
+  storageClassName: ""
+
+resources:
+  requests:
+    cpu: "150m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+secrets:
+  eventKey: ""
+  signingKey: ""
