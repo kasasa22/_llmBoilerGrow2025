@@ -24,36 +24,87 @@ Populated from `terraform output` after `apply`.
 
 ## Architecture
 
-```
-                 ┌──────────────┐
-Browser ─────────▶ Flask (:8080)│  POST /api/chat
-                 │  routes/*.py │  GET  /api/jobs/<id>/stream (SSE)
-                 └──┬─────────┬─┘
-        Inngest evt │         │ Redis pub/sub
-                    ▼         │
-              ┌───────────────┴┐
-              │ Inngest (:8288)│  self-hosted single-binary
-              └────────┬───────┘
-                       ▼
-              ┌──────────────────────┐
-              │ Worker (Node/TS)     │  agents/{research,analysis,synthesis}.ts
-              │ AgentKit Network     │  network.ts hybrid router
-              │  ├─ webSearch (DDG)  │
-              │  ├─ fetchUrl (SSRF)  │  → RAG chunk+embed (nomic-embed-text)
-              │  └─ submitAnswer     │
-              └────────┬─────────────┘
-                       │ OpenAI-compatible /v1
-                       ▼
-              ┌──────────────────────┐
-              │ Ollama (:11434)      │  qwen3:8b + nomic-embed-text
-              │ GPU node (Civo)      │
-              └──────────────────────┘
+### System topology
 
-State: Redis  job:{id}:status  |  job:{id}:events  |  job:{id}:log  |  job:{id}:lock  |  job:{id}:final
+```mermaid
+flowchart LR
+  browser["Browser<br/>EventSource + POST"]
+
+  subgraph apps["Cluster :: apps"]
+    flask["Flask API (:8080)"]
+    chat_route["routes/chat.py"]
+    stream_route["routes/stream.py"]
+    worker["Worker Node/TS (:3000)"]
+    network["AgentKit Network:<br/>Research -> Analysis -> Synthesis"]
+    flask --> chat_route
+    flask --> stream_route
+    worker --> network
+  end
+
+  subgraph inngest_ns["Cluster :: inngest"]
+    inngest["Inngest self-hosted (:8288)"]
+  end
+
+  subgraph data["Cluster :: data"]
+    redis["Redis<br/>pub/sub + status + lock"]
+  end
+
+  subgraph ollama_ns["Cluster :: ollama"]
+    ollama["Ollama (:11434)<br/>qwen3:8b + nomic-embed-text"]
+  end
+
+  browser -->|"POST /api/chat"| chat_route
+  stream_route -->|"SSE text/event-stream"| browser
+  chat_route -->|"send event"| inngest
+  inngest -->|"POST /api/inngest"| worker
+  network -->|"OpenAI-compat /v1"| ollama
+  worker -->|"PUBLISH / HSET / SETNX"| redis
+  redis -->|"SUBSCRIBE + replay log"| stream_route
 ```
+
+State lives entirely in Redis:
+`job:{id}:status` (HASH) · `job:{id}:events` (pub/sub) · `job:{id}:log` (LIST replay) · `job:{id}:lock` (SETNX + heartbeat) · `job:{id}:final` (terminal envelope).
 
 Every log line + Redis envelope carries `{trace_id, job_id, span_id, parent_span_id, ts, phase}`.
 See [`scripts/trace.sh`](scripts/trace.sh) for correlated tail.
+
+### Request lifecycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Browser
+    participant Flask as "Flask :8080"
+    participant Redis
+    participant Inngest as "Inngest :8288"
+    participant Worker as "Worker :3000"
+    participant Ollama as "Ollama :11434"
+
+    Browser->>Flask: POST /api/chat {query}
+    Flask->>Redis: SET NX job:hash:{hash} (dedup)
+    Flask->>Redis: HSET job:{id}:status = queued
+    Flask->>Inngest: send research/query.submitted {job_id, trace_id, query}
+    Flask-->>Browser: 202 {job_id, stream_url}
+
+    Browser->>Flask: GET /api/jobs/{id}/stream (EventSource)
+    Flask->>Redis: SUBSCRIBE job:{id}:events
+
+    Inngest->>Worker: invoke researchFn via /api/inngest
+    Worker->>Redis: step.run acquire-lock -> SETNX job:{id}:lock
+    Worker->>Redis: PUBLISH phase=job.started
+    Redis-->>Flask: job:{id}:events -> job.started
+    Flask-->>Browser: text/event-stream event=job.started
+
+    Note over Worker: Agent loop -- Research -> Analysis -> Synthesis with tool calls
+    Worker->>Ollama: POST /v1/chat/completions and /v1/embeddings
+    Ollama-->>Worker: completions + vectors
+    Note over Worker,Redis: Each step publishes envelope {trace_id, job_id, span_id, ts, phase, data}
+    Note over Redis,Browser: Flask relays every published event as SSE (keep-alive comment every 15s)
+
+    Worker->>Redis: submitAnswer -> PUBLISH phase=final, then phase=done
+    Redis-->>Flask: final + done
+    Flask-->>Browser: text/event-stream event=final, event=done
+```
 
 ## The agent
 
@@ -69,6 +120,47 @@ Router transitions:
 - Terminate on: `submitAnswer` called, `callCount ≥ 12`, `wall_clock ≥ 120s`, or `errors.length ≥ 3`.
 
 Model: `qwen3:8b` (see [ADR-004](docs/adr/004-model-choice-qwen3-8b.md)).
+
+### Network state machine
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> research
+
+    research --> research: sources lt 3 or evidence lt 4
+    research --> analysis: sources gte 3 AND evidence gte 4
+
+    analysis --> analysis: claims lt 3 AND iter lt 2
+    analysis --> synthesis: claims gte 3 OR iter gte 2
+
+    synthesis --> synthesis: not finalAnswer
+    synthesis --> done_ok: submitAnswer called
+
+    done_ok --> [*]
+
+    state guard_check <<choice>>
+    research --> guard_check: post-step check
+    analysis --> guard_check: post-step check
+    synthesis --> guard_check: post-step check
+
+    guard_check --> terminated_budget: BUDGET_EXCEEDED
+    guard_check --> terminated_wallclock: elapsed gte 120s
+    guard_check --> terminated_errors: errors.length gte 3
+    guard_check --> terminated_calls: callCount gte 12
+
+    terminated_budget --> [*]
+    terminated_wallclock --> [*]
+    terminated_errors --> [*]
+    terminated_calls --> [*]
+
+    note right of guard_check
+      Evaluated after every
+      agent step at any phase.
+      Budget path forces one
+      synthesis call, then exits.
+    end note
+```
 
 ## Quickstart — local
 
