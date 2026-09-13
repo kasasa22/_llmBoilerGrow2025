@@ -22,7 +22,8 @@ spec:
         - name: inngest
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args:
+          command:
+            - inngest
             - start
             - --host
             - "0.0.0.0"
