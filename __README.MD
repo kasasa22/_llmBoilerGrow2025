@@ -493,4 +493,4 @@ _llmBoilerGrow2025/
 
 ## License / Attribution
 
-Adapted from `growAssignments/_llmBoilerGrow2025`. Additions © 2026 Trevor Ssuuna.
+Adapted from `growAssignments/_llmBoilerGrow2025`. Additions © 2026 Trevor Kasasa.

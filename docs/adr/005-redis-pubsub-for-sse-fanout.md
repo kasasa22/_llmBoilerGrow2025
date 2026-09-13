@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-14
-- Deciders: Trevor Ssuuna
+- Deciders: Trevor Kasasa
 - Tags: architecture, transport
 
 ## Context and Problem Statement
