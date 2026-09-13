@@ -46,6 +46,8 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
   });
 
   const busy = submitting || status === 'connecting' || status === 'open';
+  const hasStream = jobId !== null;
+  const isWaiting = hasStream && !final.answer && status !== 'error' && status !== 'closed';
 
   const onSubmit = async (query: string) => {
     setSubmitting(true);
@@ -80,7 +82,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
       case 'reconnecting':
         return 'reconnecting…';
       case 'closed':
-        return 'stream complete';
+        return 'complete';
       case 'error':
         return 'error';
       default:
@@ -88,28 +90,56 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
     }
   }, [status]);
 
+  const currentPhase = events.length > 0 ? events[events.length - 1]?.phase ?? null : null;
+
   return (
     <main>
       <QueryForm disabled={busy} onSubmit={onSubmit} />
 
-      <div className="controls">
-        <JobBadge jobId={jobId} />
-        <TraceBadge traceId={traceId} />
-        {statusLabel ? <span className="hint">{statusLabel}</span> : null}
-        <span className="hint">
-          {modelName} · {env}
-        </span>
-      </div>
+      {hasStream ? (
+        <div className="controls">
+          <JobBadge jobId={jobId} />
+          <TraceBadge traceId={traceId} />
+          {statusLabel ? <span className="hint">{statusLabel}</span> : null}
+          <span className="hint">
+            {modelName} · {env}
+          </span>
+        </div>
+      ) : null}
 
       <ErrorBanner message={error} />
 
-      <EventTimeline events={events} />
+      {isWaiting ? (
+        <section className="answer answer--waiting">
+          <div className="answer-waiting">
+            <span className="spinner" aria-hidden />
+            <div>
+              <strong>Working on your question…</strong>
+              <p className="hint">
+                {currentPhase
+                  ? `Phase: ${currentPhase}`
+                  : 'Waiting for the agent to start streaming.'}
+              </p>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <AnswerPanel
         answer={final.answer}
         citations={final.citations}
         partial={final.partial}
       />
+
+      {hasStream ? (
+        <details className="timeline-details">
+          <summary>
+            Show event timeline
+            {events.length > 0 ? <span className="hint"> · {events.length}</span> : null}
+          </summary>
+          <EventTimeline events={events} />
+        </details>
+      ) : null}
     </main>
   );
 }

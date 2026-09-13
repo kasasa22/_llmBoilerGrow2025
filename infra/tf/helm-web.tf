@@ -16,8 +16,12 @@ resource "helm_release" "web" {
     value = var.web_image_tag
   }
   set {
-    name  = "env.NEXT_PUBLIC_MODEL_NAME"
-    value = var.model_name
+    name  = "env.MODEL_NAME"
+    value = local.effective_model_name
+  }
+  set {
+    name  = "env.APP_ENV"
+    value = var.enable_gpu ? "prod" : "demo"
   }
 
   depends_on = [

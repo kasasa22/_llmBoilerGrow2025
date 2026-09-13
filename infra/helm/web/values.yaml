@@ -21,6 +21,6 @@ resources:
 env:
   NODE_ENV: "production"
   FLASK_INTERNAL_URL: "http://app.apps.svc.cluster.local"
-  NEXT_PUBLIC_ENV: "prod"
-  NEXT_PUBLIC_MODEL_NAME: "qwen3:8b"
-  NEXT_PUBLIC_INNGEST_DASHBOARD_URL: ""
+  APP_ENV: "prod"
+  MODEL_NAME: "qwen3:8b"
+  INNGEST_DASHBOARD_URL: ""
