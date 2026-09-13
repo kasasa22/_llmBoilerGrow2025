@@ -18,6 +18,7 @@ import { getRedis, pingRedis } from './redis.js';
 
 const app = express();
 app.disable('x-powered-by');
+app.use(express.json({ limit: '10mb' }));
 
 app.use((req, _res, next) => {
   const start = Date.now();

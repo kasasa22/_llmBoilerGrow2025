@@ -103,10 +103,7 @@ export const researchFn = inngest.createFunction(
         });
 
         try {
-          await step.run('network.run', async () => {
-            await network.run(data.query);
-            return { phase: state.phase, iterations: state.iteration };
-          });
+          await network.run(data.query);
         } catch (err) {
           const classified = classify(err);
           await onSoftError(state, jobId, classified);
