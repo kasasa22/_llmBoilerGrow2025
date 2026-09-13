@@ -9,6 +9,11 @@ on:
       - 'infra/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
+    inputs:
+      force_replace_cluster:
+        description: 'Destroy and recreate the Civo cluster (use when changing node pool size)'
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-main
@@ -113,7 +118,13 @@ jobs:
           TF_VAR_worker_image_tag: ${{ github.sha }}
           TF_VAR_web_image_repository: ghcr.io/${{ env.repo_owner }}/llm-boilerplate-web
           TF_VAR_web_image_tag: ${{ github.sha }}
-        run: terraform -chdir=infra/tf/ apply -auto-approve -refresh=false
+        run: |
+          REPLACE=""
+          if [ "${{ inputs.force_replace_cluster }}" = "true" ]; then
+            REPLACE="-replace=civo_kubernetes_cluster.cluster"
+            echo "::warning::force_replace_cluster=true — cluster will be destroyed and recreated"
+          fi
+          terraform -chdir=infra/tf/ apply -auto-approve -refresh=false $REPLACE
 
       - name: Publish outputs to step summary
         if: always()
