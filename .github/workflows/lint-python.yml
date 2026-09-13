@@ -1,18 +1,20 @@
-name: Python Linting
+name: Python Linting and Tests
 
 on:
   push:
     branches: [main]
     paths:
       - 'app/**/*.py'
+      - 'app/requirements*.txt'
       - '.github/workflows/lint-python.yml'
   pull_request:
     branches: [main]
     paths:
       - 'app/**/*.py'
+      - 'app/requirements*.txt'
 
 jobs:
-  flake8-lint:
+  lint-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,8 +22,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install flake8
-        run: python -m pip install --quiet flake8
-      - name: Run flake8 (critical only)
-        run: |
-          flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          cache: 'pip'
+          cache-dependency-path: 'app/requirements-dev.txt'
+      - name: Install deps
+        run: python -m pip install -r app/requirements-dev.txt flake8
+      - name: Flake8 (critical only)
+        run: flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Pytest
+        env:
+          PYTHONPATH: .
+        run: python -m pytest app/tests/ -v --tb=short

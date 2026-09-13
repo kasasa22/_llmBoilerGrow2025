@@ -62,13 +62,23 @@ trace:  ## Correlated log tail (make trace T=<trace_id>)
 
 .PHONY: worker-install
 worker-install:  ## Install worker deps locally (for typecheck without Docker)
-	cd app/worker && npm install --no-audit --no-fund
+	cd app/worker && npm install --no-audit --no-fund --legacy-peer-deps
 
 .PHONY: worker-typecheck
 worker-typecheck:  ## tsc --noEmit on the worker
-	cd app/worker && npx --yes typescript@5.5 tsc -p tsconfig.json --noEmit
+	cd app/worker && npm run typecheck
+
+.PHONY: worker-test
+worker-test:  ## vitest on the worker
+	cd app/worker && npm test
+
+.PHONY: py-test
+py-test:  ## pytest on app/tests
+	PYTHONPATH=. python3 -m pytest app/tests/ -v
+
+.PHONY: test
+test: worker-test py-test  ## Run all unit tests
 
 .PHONY: lint-py
 lint-py:  ## flake8 critical-only, matching CI
-	python3 -m pip install --quiet flake8
 	python3 -m flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics

@@ -1,4 +1,4 @@
-name: Worker Typecheck
+name: Worker Typecheck and Tests
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
       - 'app/worker/**'
 
 jobs:
-  typecheck:
+  typecheck-and-test:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,6 +26,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: 'app/worker/package-lock.json'
       - name: Install
-        run: npm ci --no-audit --no-fund
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
       - name: Typecheck
         run: npm run typecheck
+      - name: Unit tests (vitest)
+        run: npm test

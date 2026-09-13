@@ -1,5 +1,8 @@
 node_modules
 dist
+coverage
+tests
+vitest.config.ts
 .git
 .gitignore
 .env

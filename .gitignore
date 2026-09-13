@@ -454,3 +454,18 @@ infra/tf/terraform.tfvars
 
 .vscode/
 .DS_STORE
+
+# Local venv / caches
+.venv/
+venv/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Vitest
+app/worker/node_modules/
+app/worker/coverage/
+app/worker/dist/
