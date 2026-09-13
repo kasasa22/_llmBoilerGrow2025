@@ -29,9 +29,11 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 28px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: 18px 32px;
+  background: var(--bg);
+  max-width: 1180px;
+  width: 100%;
+  margin: 0 auto;
 }
 .brand { display: flex; align-items: center; gap: 12px; }
 .brand h1 { font-size: 18px; margin: 0; font-weight: 600; }
@@ -53,13 +55,13 @@ header {
 .trace-badge { color: var(--text-dim); }
 
 main {
-  max-width: 900px;
+  max-width: 1180px;
   width: 100%;
-  margin: 32px auto;
-  padding: 0 24px;
+  margin: 16px auto 40px;
+  padding: 0 32px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 24px;
   flex: 1;
 }
 
@@ -225,6 +227,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
   color: var(--text-dim);
   font-size: 13px;
+  -webkit-user-select: none;
   user-select: none;
   list-style: none;
   padding: 4px 0;
@@ -235,9 +238,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .timeline-details[open] .timeline { margin-top: 12px; }
 
 footer {
+  max-width: 1180px;
+  width: 100%;
+  margin: 0 auto;
   text-align: center;
-  padding: 20px;
+  padding: 20px 32px 32px;
   color: var(--text-dim);
   font-size: 12px;
-  border-top: 1px solid var(--border);
 }

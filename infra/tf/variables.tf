@@ -45,10 +45,12 @@ variable "cluster_node_size" {
 
 variable "cpu_cluster_node_size" {
   type        = string
-  default     = "g4s.kube.medium"
+  default     = "g4s.kube.large"
   description = <<-EOT
     Civo Kubernetes CPU node type. Used when enable_gpu = false.
-    g4s.kube.medium: 4 vCPU, 8GB RAM — enough for llama3.2:3b on CPU (~5-8 tok/s).
+    g4s.kube.large: 4 vCPU, 8GB RAM — headroom for Ollama (llama3.2:3b ~2GB)
+    + Redis + Inngest + Worker + Flask + Web + Ollama-UI without OOM.
+    g4s.kube.medium (2 vCPU, 4GB) is too small — the whole stack OOMkills the kubelet.
   EOT
 }
 
