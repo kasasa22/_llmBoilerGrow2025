@@ -1,4 +1,11 @@
 terraform {
+  cloud {
+    organization = "kasasa22-llm"
+    workspaces {
+      name = "llm-boilerplate"
+    }
+  }
+
   required_providers {
     #  User to provision resources (firewal / cluster) in civo.com
     civo = {
