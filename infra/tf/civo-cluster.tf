@@ -5,7 +5,7 @@ resource "civo_kubernetes_cluster" "cluster" {
   network_id  = civo_network.network.id
 
   cluster_type       = "talos"
-  kubernetes_version = "1.27.0"
+  kubernetes_version = "talos-v1.5.0"
 
   write_kubeconfig = true
 
