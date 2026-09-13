@@ -7,8 +7,6 @@ on:
       - 'app/**'
       - 'infra/**'
       - '.github/workflows/deploy.yml'
-    paths-ignore:
-      - '**/*.md'
 
 concurrency:
   group: deploy-main
