@@ -82,3 +82,23 @@ test: worker-test py-test  ## Run all unit tests
 .PHONY: lint-py
 lint-py:  ## flake8 critical-only, matching CI
 	python3 -m flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+
+# Terraform wrappers that source .env and export ENABLE_GPU as TF_VAR_enable_gpu.
+# The single knob in .env drives cluster node size + GPU operator + Ollama chart + chat model.
+TF_ENV = set -a; . ./.env; set +a; export TF_VAR_enable_gpu=$${ENABLE_GPU:-true};
+
+.PHONY: tf-init
+tf-init:  ## terraform init (reads ENABLE_GPU from .env)
+	@$(TF_ENV) terraform -chdir=infra/tf init -upgrade
+
+.PHONY: tf-plan
+tf-plan:  ## terraform plan (reads ENABLE_GPU from .env)
+	@$(TF_ENV) terraform -chdir=infra/tf plan
+
+.PHONY: tf-apply
+tf-apply:  ## terraform apply (reads ENABLE_GPU from .env)
+	@$(TF_ENV) terraform -chdir=infra/tf apply
+
+.PHONY: tf-destroy
+tf-destroy:  ## terraform destroy (reads ENABLE_GPU from .env)
+	@$(TF_ENV) terraform -chdir=infra/tf destroy

@@ -15,9 +15,14 @@ resource "helm_release" "ollama" {
     "${file("values/ollama-values.yaml")}"
   ]
 
+  set {
+    name  = "ollama.gpu.enabled"
+    value = var.enable_gpu
+  }
+
   set_list {
     name  = "ollama.models.pull"
-    value = var.default_models
+    value = local.effective_default_models
   }
 
   depends_on = [

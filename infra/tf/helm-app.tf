@@ -19,7 +19,7 @@ resource "helm_release" "app" {
   }
   set {
     name  = "env.MODEL_NAME"
-    value = var.model_name
+    value = local.effective_model_name
   }
   set_sensitive {
     name  = "secrets.INNGEST_EVENT_KEY"

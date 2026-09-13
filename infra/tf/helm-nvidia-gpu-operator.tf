@@ -1,5 +1,5 @@
 resource "helm_release" "nvidia_gpu_operator" {
-  count            = var.deploy_nv_device_plugin_ds ? 1 : 0
+  count            = local.effective_deploy_gpu_operator ? 1 : 0
   name             = "gpu-operator"
   repository       = "https://helm.ngc.nvidia.com/nvidia"
   chart            = "gpu-operator"

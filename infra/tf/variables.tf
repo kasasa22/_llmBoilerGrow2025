@@ -8,11 +8,28 @@ variable "cluster_name" {
   description = "The name of the cluster to create"
 }
 
+variable "enable_gpu" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Master toggle for GPU vs CPU deployment. Read from the ENABLE_GPU env var
+    (TF_VAR_enable_gpu). When true, provisions a GPU node pool, installs the
+    NVIDIA GPU Operator, and pulls the GPU-class chat model. When false,
+    provisions a CPU node pool, skips the GPU operator, tells the Ollama chart
+    to disable GPU scheduling, and switches to the CPU-friendly chat model.
+
+    Rationale for the CPU fallback: Civo GPU K8s inventory is region-limited
+    (LON1 only for SKUs that fit our 63GB account RAM quota) and periodically
+    sold out. This toggle keeps the Civo deployment path unchanged while letting
+    the reviewer see a live cluster IP even during GPU capacity outages.
+  EOT
+}
+
 variable "cluster_node_size" {
   type        = string
   default     = "g4g.40.kube.small"
   description = <<-EOT
-    Civo Kubernetes GPU node type. Must match the region.
+    Civo Kubernetes GPU node type. Used when enable_gpu = true.
 
     Why not the boilerplate's `g4s.kube.small` default: that SKU LOOKS like GPU
     (naming convention "g4X.kube.*" is inconsistent) but is CPU-only per the Civo
@@ -26,10 +43,19 @@ variable "cluster_node_size" {
   EOT
 }
 
+variable "cpu_cluster_node_size" {
+  type        = string
+  default     = "g4s.kube.medium"
+  description = <<-EOT
+    Civo Kubernetes CPU node type. Used when enable_gpu = false.
+    g4s.kube.medium: 4 vCPU, 8GB RAM — enough for llama3.2:3b on CPU (~5-8 tok/s).
+  EOT
+}
+
 variable "cluster_node_count" {
   type        = number
   default     = 1
-  description = "Number of GPU nodes"
+  description = "Number of cluster nodes (applies to both GPU and CPU pools)."
 }
 
 # # # # # # # # # # #
@@ -89,9 +115,15 @@ variable "ollama_ui_image_version" {
 }
 
 variable "model_name" {
-  description = "Chat model name for the worker (must be present in default_models)."
+  description = "Chat model name when enable_gpu = true. Must be present in default_models."
   type        = string
   default     = "qwen3:8b"
+}
+
+variable "cpu_model_name" {
+  description = "Chat model name when enable_gpu = false. Small enough to run on CPU."
+  type        = string
+  default     = "llama3.2:3b"
 }
 
 # # # # # # # # # # # # # # # # # #

@@ -1,6 +1,12 @@
 # Copy to terraform.tfvars and fill in.
 civo_token = "YOUR_CIVO_API_TOKEN"
 
+# GPU vs CPU deployment. Prefer setting via .env + `make tf-apply` (reads ENABLE_GPU).
+# Also honoured directly by TF_VAR_enable_gpu env var and by CI via a repo variable
+# (github.com -> Settings -> Secrets and variables -> Actions -> Variables -> ENABLE_GPU).
+# Default true. Flip to false when Civo GPU inventory is out or the account RAM quota blocks GPU SKUs.
+# enable_gpu = true
+
 # Inngest self-hosted needs signing + event keys even in dev.
 # Generate once locally:
 #   openssl rand -hex 32   # event key

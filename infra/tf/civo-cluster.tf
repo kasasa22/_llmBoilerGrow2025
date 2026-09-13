@@ -13,7 +13,7 @@ resource "civo_kubernetes_cluster" "cluster" {
 
   # attach one 
   pools {
-    size       = var.cluster_node_size
+    size       = local.effective_node_size
     node_count = var.cluster_node_count
   }
 

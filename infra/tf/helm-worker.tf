@@ -19,7 +19,7 @@ resource "helm_release" "worker" {
   }
   set {
     name  = "env.MODEL_NAME"
-    value = var.model_name
+    value = local.effective_model_name
   }
   set {
     name  = "env.ALLOWED_DOMAINS"
