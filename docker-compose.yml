@@ -46,6 +46,9 @@ services:
         condition: service_healthy
       inngest:
         condition: service_started
+    env_file:
+      - path: .env
+        required: false
     environment:
       NODE_ENV: development
       LOG_LEVEL: ${LOG_LEVEL:-info}
