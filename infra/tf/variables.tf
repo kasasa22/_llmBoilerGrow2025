@@ -32,8 +32,8 @@ variable "civo_token" {
 
 variable "region" {
   type        = string
-  default     = "LON1"
-  description = "Civo region"
+  default     = "NYC1"
+  description = "Civo region. Must match the region selected on the dashboard account that owns civo_token."
 }
 
 # # # # # # # # # # # # # # # # # #
