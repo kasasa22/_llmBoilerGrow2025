@@ -18,11 +18,8 @@
   "engines": {
     "node": ">=22 <23"
   },
-  "overrides": {
-    "inngest": "^3.54.0"
-  },
   "dependencies": {
-    "@inngest/agent-kit": "^0.5.0",
+    "@inngest/agent-kit": "^0.13.2",
     "cheerio": "^1.0.0",
     "express": "^4.19.2",
     "inngest": "^3.54.0",
