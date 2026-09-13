@@ -92,5 +92,21 @@ services:
     ports:
       - "8080:8080"
 
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    depends_on:
+      flask:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      FLASK_INTERNAL_URL: http://flask:8080
+      NEXT_PUBLIC_ENV: ${NEXT_PUBLIC_ENV:-dev}
+      NEXT_PUBLIC_MODEL_NAME: ${MODEL_NAME:-qwen3:8b}
+      NEXT_PUBLIC_INNGEST_DASHBOARD_URL: ${NEXT_PUBLIC_INNGEST_DASHBOARD_URL:-http://localhost:8288}
+    ports:
+      - "3001:3001"
+
 volumes:
   ollama:

@@ -122,6 +122,18 @@ variable "worker_image_tag" {
   default     = "latest"
 }
 
+variable "web_image_repository" {
+  description = "Fully-qualified Next.js frontend image (no tag)."
+  type        = string
+  default     = "ghcr.io/kasasa22/llm-boilerplate-web"
+}
+
+variable "web_image_tag" {
+  description = "Next.js frontend image tag."
+  type        = string
+  default     = "latest"
+}
+
 # # # # # # # # #
 # Inngest secrets #
 # # # # # # # # #

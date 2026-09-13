@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'app/**'
+      - 'web/**'
       - 'infra/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -69,6 +70,19 @@ jobs:
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
 
+      - name: Build & push Next.js web image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ env.repo_owner }}/llm-boilerplate-web:${{ github.sha }}
+            ghcr.io/${{ env.repo_owner }}/llm-boilerplate-web:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -84,6 +98,8 @@ jobs:
           TF_VAR_app_image_tag: ${{ github.sha }}
           TF_VAR_worker_image_repository: ghcr.io/${{ env.repo_owner }}/llm-boilerplate-worker
           TF_VAR_worker_image_tag: ${{ github.sha }}
+          TF_VAR_web_image_repository: ghcr.io/${{ env.repo_owner }}/llm-boilerplate-web
+          TF_VAR_web_image_tag: ${{ github.sha }}
         run: terraform -chdir=infra/tf/ plan -no-color -out=tfplan
         continue-on-error: true
 
@@ -93,6 +109,8 @@ jobs:
           TF_VAR_app_image_tag: ${{ github.sha }}
           TF_VAR_worker_image_repository: ghcr.io/${{ env.repo_owner }}/llm-boilerplate-worker
           TF_VAR_worker_image_tag: ${{ github.sha }}
+          TF_VAR_web_image_repository: ghcr.io/${{ env.repo_owner }}/llm-boilerplate-web
+          TF_VAR_web_image_tag: ${{ github.sha }}
         run: terraform -chdir=infra/tf/ apply -auto-approve
 
       - name: Publish outputs to step summary

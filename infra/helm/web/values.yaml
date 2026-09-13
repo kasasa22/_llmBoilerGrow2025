@@ -1,0 +1,26 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/kasasa22/llm-boilerplate-web
+  pullPolicy: Always
+  tag: "latest"
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 3001
+
+resources:
+  requests:
+    cpu: "150m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+env:
+  NODE_ENV: "production"
+  FLASK_INTERNAL_URL: "http://app.apps.svc.cluster.local"
+  NEXT_PUBLIC_ENV: "prod"
+  NEXT_PUBLIC_MODEL_NAME: "qwen3:8b"
+  NEXT_PUBLIC_INNGEST_DASHBOARD_URL: ""
