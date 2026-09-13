@@ -37,7 +37,7 @@ export const researchFn = inngest.createFunction(
     id: 'research-run',
     name: 'Research query',
     concurrency: { limit: 2 },
-    retries: 2,
+    retries: 0,
   },
   { event: RESEARCH_QUERY_SUBMITTED },
   async ({ event, step }) => {
