@@ -10,18 +10,19 @@ variable "cluster_name" {
 
 variable "cluster_node_size" {
   type        = string
-  default     = "an.g1.l40s.kube.x1"
+  default     = "g4g.40.kube.small"
   description = <<-EOT
     Civo Kubernetes GPU node type. Must match the region.
 
-    The boilerplate's original default `g4s.kube.small` LOOKS like a GPU SKU but is
-    actually a CPU-only 1-core/2GB node (Civo /v2/sizes reports gpu_count=0), which
-    causes helm_release.ollama to hang forever waiting on nvidia.com/gpu quota.
+    Why not the boilerplate's `g4s.kube.small` default: that SKU LOOKS like GPU
+    (naming convention "g4X.kube.*" is inconsistent) but is CPU-only per the Civo
+    /v2/sizes API (gpu_count=0). Result: helm_release.ollama hangs forever waiting
+    on `nvidia.com/gpu: 1` quota that will never be advertised.
 
-    Real GPU Kubernetes SKUs on this account:
-      NYC1: an.g1.l40s.kube.x1  (1×L40S 48GB, 12 CPU, 96GB)  <-- current default
-      LON1: g4g.kube.small       (1×A100 80GB, 12 CPU, 96GB)
-      LON1: g4g.40.kube.small    (1×A100 40GB, 8 CPU, 56GB — cheaper A100)
+    Real GPU Kubernetes SKUs available to this account:
+      LON1: g4g.40.kube.small   (1×A100 40GB, 8 CPU, 56GB)  <-- current default; fits in 63GB account quota
+      LON1: g4g.kube.small      (1×A100 80GB, 12 CPU, 96GB) - exceeds default account RAM quota
+      NYC1: an.g1.l40s.kube.x1  (1×L40S 48GB, 12 CPU, 96GB) - exceeds default account RAM quota
   EOT
 }
 
@@ -43,8 +44,8 @@ variable "civo_token" {
 
 variable "region" {
   type        = string
-  default     = "NYC1"
-  description = "Civo region. Must match the region selected on the dashboard account that owns civo_token."
+  default     = "LON1"
+  description = "Civo region. LON1 is the only region with a GPU SKU under the 63GB default RAM quota."
 }
 
 # # # # # # # # # # # # # # # # # #
