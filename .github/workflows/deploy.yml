@@ -102,7 +102,7 @@ jobs:
           TF_VAR_worker_image_tag: ${{ github.sha }}
           TF_VAR_web_image_repository: ghcr.io/${{ env.repo_owner }}/llm-boilerplate-web
           TF_VAR_web_image_tag: ${{ github.sha }}
-        run: terraform -chdir=infra/tf/ plan -no-color -out=tfplan
+        run: terraform -chdir=infra/tf/ plan -no-color -refresh=false -out=tfplan
         continue-on-error: true
 
       - name: Terraform Apply
@@ -113,7 +113,7 @@ jobs:
           TF_VAR_worker_image_tag: ${{ github.sha }}
           TF_VAR_web_image_repository: ghcr.io/${{ env.repo_owner }}/llm-boilerplate-web
           TF_VAR_web_image_tag: ${{ github.sha }}
-        run: terraform -chdir=infra/tf/ apply -auto-approve
+        run: terraform -chdir=infra/tf/ apply -auto-approve -refresh=false
 
       - name: Publish outputs to step summary
         if: always()
