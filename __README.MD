@@ -15,9 +15,10 @@ Populated from `terraform output` after `apply`.
 
 | Purpose | URL |
 |---|---|
-| Chat UI + API | `http://<chat_url>/` |
-| POST endpoint | `http://<chat_url>/api/chat` |
-| Job stream (SSE) | `http://<chat_url>/api/jobs/<id>/stream` |
+| **Primary UI (Next.js 15 + React 19)** | `http://<web_url>/` |
+| Vanilla UI + API (baseline) | `http://<chat_url>/` |
+| POST endpoint | `http://<web_url>/api/chat` (proxied) or `http://<chat_url>/api/chat` (direct) |
+| Job stream (SSE) | `http://<web_url>/api/jobs/<id>/stream` or `http://<chat_url>/api/jobs/<id>/stream` |
 | Job status | `http://<chat_url>/api/jobs/<id>` |
 | Inngest dashboard | `http://<inngest_dashboard_url>:8288` |
 | Open WebUI (Ollama) | `http://<ollama_ui_service_ip>/` |
@@ -31,6 +32,7 @@ flowchart LR
   browser["Browser<br/>EventSource + POST"]
 
   subgraph apps["Cluster :: apps"]
+    web["Next.js (:3001)<br/>App Router + route handlers"]
     flask["Flask API (:8080)"]
     chat_route["routes/chat.py"]
     stream_route["routes/stream.py"]
@@ -53,8 +55,9 @@ flowchart LR
     ollama["Ollama (:11434)<br/>qwen3:8b + nomic-embed-text"]
   end
 
-  browser -->|"POST /api/chat"| chat_route
-  stream_route -->|"SSE text/event-stream"| browser
+  browser -->|"POST + SSE"| web
+  web -->|"proxy /api/*"| flask
+  browser -.->|"vanilla baseline"| flask
   chat_route -->|"send event"| inngest
   inngest -->|"POST /api/inngest"| worker
   network -->|"OpenAI-compat /v1"| ollama
@@ -409,6 +412,46 @@ SSE holds one connection per active job for tens of seconds. Sync workers exhaus
 connections per worker at near-zero CPU cost while blocked on Redis. Trade-off: no
 accidental blocking calls — we use `redis-py` with monkey-patched sockets and no other
 blockers in the request path.
+
+### Why Next.js 15 App Router on top of a vanilla-JS-capable backend
+
+Two UIs live side-by-side. The vanilla `app/templates/index.html` (~450 lines,
+zero build step) proves the async SSE architecture works without a framework. The
+Next.js UI at `web/` adds a typed component model — Server Component page shell,
+`"use client"` interactive subtree, TypeScript discriminated union of the 25 SSE
+phases — that scales better as the UI grows. Concretely:
+`web/app/api/chat/route.ts` proxies the browser's POST to Flask server-side so
+**the browser never crosses an origin and no CORS setup is needed**, and
+`web/app/api/jobs/[id]/stream/route.ts` streams the SSE body straight back. Link:
+[ADR-009](docs/adr/009-nextjs-frontend.md).
+
+## Development timeline
+
+Dated arc of how this submission was built. Reviewers can cross-reference individual
+commits in `git log`.
+
+- **Sat 2026-09-12** — Backend (Flask + Node/TS AgentKit worker), Helm charts,
+  Terraform, 100-test suite (74 vitest + 26 pytest), 8 MADR ADRs, evaluation harness,
+  docs. All CI passing. See `feat(app):`, `feat(worker):`, `feat(infra):`, `test:` and
+  `docs:` commits from this day.
+- **Sun 2026-09-13 morning** — Local docker-compose stack verified end-to-end via
+  `make up` followed by `make smoke`. Multi-agent Network (Research → Analysis →
+  Synthesis) observed transitioning live in the SSE stream.
+- **Sun 2026-09-13 afternoon — Civo deployment attempts (documented in `fix(infra):`
+  commits):**
+  - Discovered the boilerplate's `g4s.kube.small` default is CPU-only despite the
+    "g4" GPU-like naming (Civo API confirms `gpu_count=0`) — updated the node type.
+  - Discovered account RAM quota (63 GB) rules out NYC1's `an.g1.l40s.kube.x1`
+    (96 GB) — switched to LON1's `g4g.40.kube.small` (56 GB, fits).
+  - Civo LON1 A100 40GB inventory currently exhausted (`gpu_count_exceeded` from
+    the API); Civo support contacted for either capacity confirmation or RAM
+    quota bump. Deployment automation is complete and validated by three Terraform
+    runs; the only remaining blocker is Civo GPU availability.
+- **Sun 2026-09-13 evening → Mon 2026-09-14** — Next.js 15 App Router UI added as an
+  additive service (typed SSE envelope, Server + Client Component split, route
+  handler proxy so no CORS on Flask). Existing vanilla UI kept as the baseline. See
+  `feat(web):` commit and [ADR-009](docs/adr/009-nextjs-frontend.md).
+- **Tue 2026-09-15** — Loom recording, screenshot capture, final polish.
 
 ## Troubleshooting
 
