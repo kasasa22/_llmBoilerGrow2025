@@ -24,13 +24,15 @@ export function isUrlAllowed(rawUrl: string, opts: PolicyOpts): PolicyResult {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     return { ok: false, code: 'FETCH_BLOCKED', reason: `unsupported_scheme:${url.protocol}` };
   }
-  const domain = getDomain(url.hostname);
-  if (!domain) {
-    return { ok: false, code: 'FETCH_BLOCKED', reason: 'invalid_hostname' };
-  }
+  // Check for raw IP before eTLD+1 parsing — tldts returns null for IPs, and
+  // 'raw_ip_forbidden' is a more useful signal to the agent than 'invalid_hostname'.
   const info = parse(url.hostname);
   if (info.isIp) {
     return { ok: false, code: 'FETCH_BLOCKED', reason: 'raw_ip_forbidden' };
+  }
+  const domain = getDomain(url.hostname);
+  if (!domain) {
+    return { ok: false, code: 'FETCH_BLOCKED', reason: 'invalid_hostname' };
   }
   if (opts.deny.length > 0 && opts.deny.includes(domain)) {
     return { ok: false, code: 'FETCH_BLOCKED', reason: `denylisted:${domain}` };

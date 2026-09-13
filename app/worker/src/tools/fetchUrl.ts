@@ -8,9 +8,6 @@
  *   4. Text extraction via cheerio.
  *   5. evidenceStore.addSource()    — chunk + optional embed.
  */
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
-
 import { createTool } from '@inngest/agent-kit';
 import * as cheerio from 'cheerio';
 import { fetch } from 'undici';
@@ -24,6 +21,7 @@ import { logger } from '../logger.js';
 import type { EvidenceStore } from '../rag/retriever.js';
 import { publishEvent } from '../redis.js';
 import { type NetworkState, newSourceId } from '../state.js';
+import { assertPublicHost } from './ssrf.js';
 import { isUrlAllowed } from './urlPolicy.js';
 
 export interface FetchUrlDeps {
@@ -74,7 +72,14 @@ export function createFetchUrlTool(deps: FetchUrlDeps) {
       });
 
       const parsed = new URL(url);
-      await assertNotPrivateHost(parsed.hostname);
+      const ssrf = await assertPublicHost(parsed.hostname);
+      if (!ssrf.ok) {
+        throw new AgentError({
+          code: ErrorCode.FetchBlocked,
+          message: ssrf.reason ?? 'ssrf',
+          context: { hostname: parsed.hostname, ip: ssrf.offendingIp },
+        });
+      }
 
       const timeoutSignal = AbortSignal.timeout(env.FETCH_URL_TIMEOUT_MS);
       let res;
@@ -158,44 +163,6 @@ export function createFetchUrlTool(deps: FetchUrlDeps) {
 }
 
 // ---- helpers --------------------------------------------------------------
-
-async function assertNotPrivateHost(hostname: string): Promise<void> {
-  const candidates = new Set<string>();
-  if (isIP(hostname)) {
-    candidates.add(hostname);
-  } else {
-    try {
-      const records = await lookup(hostname, { all: true });
-      for (const r of records) candidates.add(r.address);
-    } catch {
-      // DNS fail: hand off to fetch which will error naturally.
-      return;
-    }
-  }
-  for (const ip of candidates) {
-    if (isPrivateIp(ip)) {
-      throw new AgentError({
-        code: ErrorCode.FetchBlocked,
-        message: `ssrf:blocked_private_ip:${ip}`,
-        context: { hostname, ip },
-      });
-    }
-  }
-}
-
-function isPrivateIp(ip: string): boolean {
-  if (ip === '127.0.0.1' || ip === '::1') return true;
-  if (ip.startsWith('10.')) return true;
-  if (ip.startsWith('192.168.')) return true;
-  if (ip.startsWith('169.254.')) return true; // link-local + AWS metadata
-  if (ip.startsWith('0.')) return true;
-  if (/^(fc|fd)/i.test(ip)) return true; // ULA
-  if (/^fe80:/i.test(ip)) return true; // link-local v6
-  // 172.16.0.0/12
-  const m = /^172\.(\d+)\./.exec(ip);
-  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
-  return false;
-}
 
 async function readCapped(body: unknown, maxBytes: number): Promise<Uint8Array> {
   if (!body || typeof (body as { getReader?: () => unknown }).getReader !== 'function') {
