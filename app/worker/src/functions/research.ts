@@ -53,7 +53,6 @@ export const researchFn = inngest.createFunction(
         return { skipped: true, reason: 'done_replay' };
       }
 
-      // 2. Prep run state + budget.
       const budget = new BudgetTracker({
         MAX_TOOL_CALLS: env.MAX_TOOL_CALLS,
         MAX_FETCHES: env.MAX_FETCHES,
@@ -75,7 +74,6 @@ export const researchFn = inngest.createFunction(
       );
       await publishEvent({ jobId, phase: Phase.JobStarted, data: { query: data.query } });
 
-      // 3. Wall-clock abort + heartbeat.
       const runAbort = new AbortController();
       const wallClockTimer = setTimeout(() => runAbort.abort(new Error('MAX_WALL_CLOCK_MS')), env.MAX_WALL_CLOCK_MS);
       const heartbeat = setInterval(() => {
@@ -83,7 +81,6 @@ export const researchFn = inngest.createFunction(
       }, env.JOB_LOCK_HEARTBEAT_S * 1000);
 
       try {
-        // 4. Run the network.
         const network = buildResearchNetwork({
           budget,
           jobId,
@@ -106,7 +103,6 @@ export const researchFn = inngest.createFunction(
           await forcedSynthesis(jobId, state, evidence, budget);
         }
 
-        // 5. Terminal event.
         if (state.finalAnswer) {
           const envelope = await step.run('publish-final', async () =>
             publishEvent({
@@ -183,7 +179,6 @@ async function onSoftError(state: ReturnType<typeof initialState>, jobId: string
   });
 }
 
-/** Forced synthesis when the budget runs out — a single non-tool call. */
 async function forcedSynthesis(
   jobId: string,
   state: ReturnType<typeof initialState>,
