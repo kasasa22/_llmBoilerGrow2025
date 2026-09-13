@@ -2,24 +2,23 @@ ARG NODE_IMAGE=node:22-alpine
 
 FROM ${NODE_IMAGE} AS builder
 WORKDIR /build
-COPY package.json package-lock.json* ./
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund --legacy-peer-deps
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production
-RUN apk add --no-cache curl tini \
-    && addgroup -S worker -g 1000 \
-    && adduser  -S worker -G worker -u 1000
+# node:22-alpine already ships a `node` user with UID/GID 1000. Reuse it.
+RUN apk add --no-cache curl tini
 
 WORKDIR /srv
-COPY --chown=worker:worker package.json package-lock.json* ./
-RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
-COPY --chown=worker:worker --from=builder /build/dist ./dist
+COPY --chown=node:node package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund --legacy-peer-deps && npm cache clean --force
+COPY --chown=node:node --from=builder /build/dist ./dist
 
-USER worker
+USER node
 
 EXPOSE 3000
 
