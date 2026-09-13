@@ -132,19 +132,20 @@ jobs:
               -target=local_file.cluster-config
           fi
 
-          REPLACE_HELM=""
           if [ "${{ inputs.force_replace_cluster }}" = "true" ] || [ "${{ inputs.force_replace_helm }}" = "true" ]; then
-            echo "=== Reinstalling all helm releases ==="
-            REPLACE_HELM="\
-              -replace=helm_release.redis[0] \
-              -replace=helm_release.ollama[0] \
-              -replace=helm_release.ollama-ui[0] \
-              -replace=helm_release.inngest[0] \
-              -replace=helm_release.worker[0] \
-              -replace=helm_release.app[0] \
-              -replace=helm_release.web[0]"
+            echo "=== Removing stale helm release state entries (releases will be reinstalled fresh) ==="
+            for RES in \
+              'helm_release.redis[0]' \
+              'helm_release.ollama[0]' \
+              'helm_release.ollama-ui[0]' \
+              'helm_release.inngest[0]' \
+              'helm_release.worker[0]' \
+              'helm_release.app[0]' \
+              'helm_release.web[0]'; do
+              terraform -chdir=infra/tf/ state rm "$RES" || echo "  (not in state, skipping $RES)"
+            done
           fi
-          terraform -chdir=infra/tf/ apply -auto-approve -refresh=false $REPLACE_HELM
+          terraform -chdir=infra/tf/ apply -auto-approve -refresh=false
 
       - name: Publish outputs to step summary
         if: always()
