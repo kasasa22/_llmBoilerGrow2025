@@ -72,7 +72,9 @@ export const researchFn = inngest.createFunction(
           model: data.model || env.MODEL_NAME,
         }),
       );
-      await publishEvent({ jobId, phase: Phase.JobStarted, data: { query: data.query } });
+      await step.run('publish-job-started', async () =>
+        publishEvent({ jobId, phase: Phase.JobStarted, data: { query: data.query } }),
+      );
 
       const runAbort = new AbortController();
       const wallClockTimer = setTimeout(() => runAbort.abort(new Error('MAX_WALL_CLOCK_MS')), env.MAX_WALL_CLOCK_MS);
