@@ -21,7 +21,7 @@ resource "helm_release" "ollama" {
   }
 
   depends_on = [
-    kubernetes_daemonset.nvidia-device-plugin-daemonset
+    helm_release.nvidia_gpu_operator
   ]
 
 }
