@@ -48,6 +48,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
   const busy = submitting || status === 'connecting' || status === 'open';
   const hasStream = jobId !== null;
   const isWaiting = hasStream && !final.answer && status !== 'error' && status !== 'closed';
+  const streamEndedWithoutAnswer = hasStream && !final.answer && (status === 'closed' || status === 'error');
 
   const onSubmit = async (query: string) => {
     setSubmitting(true);
@@ -130,6 +131,22 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
         citations={final.citations}
         partial={final.partial}
       />
+
+      {streamEndedWithoutAnswer ? (
+        <section className="answer answer--empty">
+          <div className="answer-waiting">
+            <div>
+              <strong>The agent finished without producing an answer.</strong>
+              <p className="hint">
+                The chat model exhausted its tool-call budget without calling <code>submitAnswer</code>.
+                {events.length > 0
+                  ? ` Look at the ${events.length} events below to see what happened.`
+                  : ''}
+              </p>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {hasStream ? (
         <details className="timeline-details">

@@ -123,9 +123,14 @@ variable "model_name" {
 }
 
 variable "cpu_model_name" {
-  description = "Chat model name when enable_gpu = false. Small enough to run on CPU."
+  description = <<-EOT
+    Chat model name when enable_gpu = false. qwen2.5:7b handles multi-step
+    tool calls reliably on CPU (~4.5GB RAM, ~5-8 tok/s on a 4vCPU node).
+    llama3.2:3b was tried but produced malformed tool_calls that fail Zod
+    validation, causing endless Inngest retries with no final answer.
+  EOT
   type        = string
-  default     = "llama3.2:3b"
+  default     = "qwen2.5:7b"
 }
 
 # # # # # # # # # # # # # # # # # #
