@@ -1,12 +1,3 @@
-/**
- * Inngest function: `research/query.submitted` -> multi-agent Network run.
- * Owns the full lifecycle: acquire idempotency lock, run the network under
- * a wall-clock budget, publish per-phase Redis events, persist the final
- * envelope, release the lock, and handle forced-synthesis on BUDGET_EXCEEDED.
- *
- * Every side-effect lives inside `step.run()` with a deterministic id so
- * Inngest step memoisation dedupes re-executions (see plan B1 idempotency).
- */
 import { NonRetriableError } from 'inngest';
 
 import { BudgetTracker } from '../budget.js';
@@ -46,7 +37,6 @@ export const researchFn = inngest.createFunction(
     const traceId = data.trace_id;
 
     return withTrace({ trace_id: traceId, job_id: jobId, span_id: newSpanId(), parent_span_id: null }, async () => {
-      // 1. Acquire lock (idempotent; short-circuits on 'already running' / 'done').
       const lockOutcome = await step.run('acquire-lock', async () => acquireJobLock(jobId));
 
       if (lockOutcome.state === 'busy_running') {
@@ -110,6 +100,10 @@ export const researchFn = inngest.createFunction(
           if (classified.code === ErrorCode.BudgetExceeded) {
             await forcedSynthesis(jobId, state, evidence, budget);
           }
+        }
+
+        if (!state.finalAnswer && state.sources.length > 0) {
+          await forcedSynthesis(jobId, state, evidence, budget);
         }
 
         // 5. Terminal event.
@@ -205,17 +199,26 @@ async function forcedSynthesis(
     data: { forced: true, claimCount: state.claims.length, sourceCount: state.sources.length },
   });
 
-  // Best-effort: shape a minimal partial answer from claims. A follow-up PR
-  // could call the LLM once more here (bounded); the current path keeps the
-  // budget-exhausted branch deterministic and cost-free.
-  const bullets = state.claims.slice(0, 8).map((c, i) => `- ${c.text} [${i + 1}]`).join('\n');
-  const answer =
-    bullets.length > 0
-      ? `Budget exhausted before final synthesis. Best-effort summary from extracted claims:\n\n${bullets}`
-      : 'Budget exhausted before any claims were extracted.';
-  const citations = state.claims
+  const claimBullets = state.claims.slice(0, 8).map((c, i) => `- ${c.text} [${i + 1}]`).join('\n');
+  const sourceBullets = state.sources
+    .slice(0, 6)
+    .map((s, i) => `- ${s.title || s.url} [${i + 1}]`)
+    .join('\n');
+
+  let answer: string;
+  if (claimBullets.length > 0) {
+    answer = `Best-effort summary from extracted claims (budget exhausted before full synthesis):\n\n${claimBullets}`;
+  } else if (sourceBullets.length > 0) {
+    answer = `The research agent gathered ${state.sources.length} source(s) but the synthesis step did not converge on a final answer before the budget was reached. Sources reviewed:\n\n${sourceBullets}\n\nTry a shorter, more specific query — the CPU-hosted model handles single-fact questions best.`;
+  } else {
+    answer = 'The research agent did not find any usable sources within the budget.';
+  }
+
+  const claimCitations = state.claims
     .flatMap((c) => c.sourceIds)
-    .filter((v, i, a) => a.indexOf(v) === i)
+    .filter((v, i, a) => a.indexOf(v) === i);
+  const citationSourceIds = claimCitations.length > 0 ? claimCitations : state.sources.map((s) => s.id);
+  const citations = citationSourceIds
     .slice(0, 20)
     .map((sourceId, idx) => {
       const src = state.sources.find((s) => s.id === sourceId);
