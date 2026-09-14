@@ -309,8 +309,33 @@ Required GitHub **variables** (same page, Variables tab):
 
 The workflow_dispatch has two opt-in checkboxes for infra recovery — leave both **unchecked** for normal runs:
 
-- **`force_replace_cluster`** — destroy + recreate the Civo cluster. Only needed when changing node size (Civo doesn't allow in-place pool resize). Adds ~6 minutes.
+- **`force_replace_cluster`** — destroy + recreate the Civo cluster. Only needed when changing node size or hardware profile (Civo doesn't allow in-place pool resize). Adds ~6 minutes.
 - **`force_replace_helm`** — `terraform state rm` all helm releases so they reinstall fresh. Use after a cluster rebuild if TF Cloud state is out of sync with the fresh cluster.
+
+### When you flip ENABLE_GPU
+
+Changing the `ENABLE_GPU` GH variable is a **hardware profile change** — Civo can't resize a pool in place, so the next `terraform apply` will fail with `Size change ("size") for existing cluster is not available at this moment` unless you tell it to destroy + recreate.
+
+**Required flow when flipping `ENABLE_GPU`:**
+
+1. Toggle `ENABLE_GPU` at `Settings → Secrets and variables → Actions → Variables → ENABLE_GPU`
+2. **Actions → Build and Deploy → Run workflow ▼**
+3. **✅ Check `Destroy and recreate the Civo cluster`**
+4. **✅ Check `Reinstall all helm releases`**
+5. Click **Run workflow**
+
+Both boxes are required together: the cluster destroy leaves stale helm-release entries in TF Cloud state, and reinstall clears them so the fresh cluster gets a clean helm install.
+
+**Also check GPU inventory first before flipping to `true`** — Civo LON1 A100 availability has been intermittent:
+
+```bash
+CIVO_TOKEN="<your-token>"
+curl -sS -H "Authorization: bearer $CIVO_TOKEN" \
+  "https://api.civo.com/v2/kubernetes/available-nodes?region=LON1" \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); [print(n['name'], 'gpu=', n.get('gpu_count',0)) for n in d if 'g4g' in n.get('name','')]"
+```
+
+If it doesn't show `gpu_count=1`, don't flip yet — the apply will destroy your CPU cluster and then fail with `gpu_count_exceeded`, leaving you with no live cluster.
 
 ### Remote state (Terraform Cloud)
 
@@ -357,6 +382,8 @@ The `ENABLE_GPU` toggle is the single source of truth for hardware profile. Terr
 | Chat model pulled by Ollama | `qwen3:8b` (~5GB) | `qwen2.5:7b` (~4.7GB) |
 
 Why the CPU fallback exists: Civo GPU inventory (LON1 only for the 63GB RAM quota) is intermittently exhausted with `gpu_count_exceeded` from the API. Setting `ENABLE_GPU=false` keeps the assignment-required Civo deployment path unchanged while removing the inventory dependency. See ADR-004 for the model rationale.
+
+> **Flipping this variable requires cluster replacement** — Civo doesn't allow in-place node pool resize. See the [When you flip ENABLE_GPU](#when-you-flip-enable_gpu) section under CI/CD for the required workflow_dispatch flow.
 
 ## Idempotency
 

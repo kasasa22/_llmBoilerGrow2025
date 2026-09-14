@@ -19,7 +19,7 @@ resource "civo_kubernetes_cluster" "cluster" {
   }
 
   lifecycle {
-    ignore_changes = [kubernetes_version]
+    ignore_changes = [kubernetes_version, pools]
   }
 }
 
