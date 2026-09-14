@@ -14,11 +14,19 @@ export interface ChatOptions {
   signal?: AbortSignal;
   temperature?: number;
   numPredict?: number;
+  repeatPenalty?: number;
+}
+
+const LOOP_WINDOW = 200;
+const LOOP_PATTERN = /(.{2,24}?)\1{5,}$/s;
+
+export function detectRepetitionLoop(tail: string): boolean {
+  return LOOP_PATTERN.test(tail.slice(-LOOP_WINDOW));
 }
 
 export interface ChatResult {
   content: string;
-  doneReason: 'stop' | 'length' | 'timeout' | 'aborted' | 'unknown';
+  doneReason: 'stop' | 'length' | 'timeout' | 'aborted' | 'repetition' | 'unknown';
   promptTokens: number;
   outputTokens: number;
   totalMs: number;
@@ -69,6 +77,8 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
       temperature: opts.temperature ?? 0.2,
       num_predict: opts.numPredict ?? env.MAX_TOKENS_PER_CALL,
       num_ctx: env.OLLAMA_NUM_CTX,
+      repeat_penalty: opts.repeatPenalty ?? env.OLLAMA_REPEAT_PENALTY,
+      repeat_last_n: env.OLLAMA_REPEAT_LAST_N,
     },
   };
   if (modelSupportsThinking(env.MODEL_NAME)) body.think = false;
@@ -106,6 +116,11 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
           const chunk = JSON.parse(line) as OllamaChatChunk;
           if (chunk.error) throw new Error(`ollama chat error: ${chunk.error}`);
           content += chunk.message?.content ?? '';
+          if (!chunk.done && detectRepetitionLoop(content)) {
+            doneReason = 'repetition';
+            controller.abort(new Error('REPETITION_LOOP'));
+            break;
+          }
           if (chunk.done) {
             doneReason = chunk.done_reason === 'length' ? 'length' : 'stop';
             promptTokens = chunk.prompt_eval_count ?? 0;

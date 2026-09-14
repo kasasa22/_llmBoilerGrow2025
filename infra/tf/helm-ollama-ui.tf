@@ -10,7 +10,7 @@ resource "helm_release" "ollama-ui" {
 
   set_list {
     name  = "webui.defaultModels"
-    value = var.default_models
+    value = local.effective_default_models
   }
 
   set {

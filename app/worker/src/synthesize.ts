@@ -61,7 +61,7 @@ Format rules:
 - GitHub-flavoured markdown, 120-250 words. Be direct and concrete.
 - Start with one sentence that directly answers the question.
 - ${structure}
-- Every factual sentence ends with a citation like [1] or [1][2], where the number is the source number from SOURCES. Use only numbers that appear in SOURCES.
+- Every factual sentence ends with a citation like [1] or [1][2], where the number is the source number from SOURCES. Use only numbers that appear in SOURCES. Cite each source at most once per sentence and never repeat a marker.
 - Never invent facts, numbers, or URLs. If the evidence does not cover part of the question, say so in one sentence instead of guessing.
 - No title, no preamble, no closing "Sources" list; the application renders citations itself.`;
 
@@ -118,8 +118,18 @@ export function dropUnknownCitations(text: string, valid: number | ReadonlySet<n
   );
 }
 
+export function collapseRepeats(text: string): string {
+  return mapProse(text, (prose) =>
+    prose
+      .replace(/(\[\d+\])(?:[ \t]*\1)+/g, '$1')
+      .replace(/(.{2,24}?)\1{2,}\s*$/s, '$1')
+      .replace(/[ \t]*\[\d*$/, ''),
+  );
+}
+
 export function finaliseAnswer(text: string, valid: number | ReadonlySet<number>, truncated: boolean): string {
-  const bounded = truncated ? trimToBoundary(text) : text;
+  const collapsed = collapseRepeats(text.trimEnd());
+  const bounded = truncated ? trimToBoundary(collapsed) : collapsed;
   return stripDanglingTail(dropUnknownCitations(bounded, valid));
 }
 
@@ -232,7 +242,7 @@ export async function directSynthesis(deps: DirectSynthesisDeps): Promise<Direct
 
   const mode: DirectSynthesisResult['mode'] = answer ? 'direct' : 'fallback';
   if (answer && truncated) {
-    answer += '\n\n*The answer was cut short by the time budget; the sources below cover the rest.*';
+    answer += '\n\n*The answer was cut short; the sources below cover the rest.*';
   }
   state.finalAnswer = answer ?? fallbackAnswer(state);
   state.citations = citations;

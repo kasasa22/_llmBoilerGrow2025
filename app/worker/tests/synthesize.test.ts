@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { modelSupportsThinking } from '../src/ollama.js';
+import { detectRepetitionLoop, modelSupportsThinking } from '../src/ollama.js';
 import {
   buildEvidenceBlock,
   buildSynthesisMessages,
   citationsFor,
+  collapseRepeats,
   dropUnknownCitations,
   fallbackAnswer,
   finaliseAnswer,
@@ -136,7 +137,37 @@ describe('dropUnknownCitations', () => {
   });
 });
 
+describe('detectRepetitionLoop', () => {
+  it('fires on a citation marker repeated many times', () => {
+    expect(detectRepetitionLoop('It runs a copy of a Pod. ' + '[1] '.repeat(8))).toBe(true);
+    expect(detectRepetitionLoop('text' + '\n\n'.repeat(10))).toBe(true);
+  });
+  it('stays quiet on normal prose and small tables', () => {
+    expect(detectRepetitionLoop('FastAPI is fast [1]. Express is minimal [2]. Both are popular [1][2].')).toBe(false);
+    expect(detectRepetitionLoop('| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |')).toBe(false);
+    expect(detectRepetitionLoop('- point one [1]\n- point two [1]\n- point three [1]')).toBe(false);
+  });
+});
+
+describe('collapseRepeats', () => {
+  it('collapses a run of the same marker and drops a trailing half marker', () => {
+    expect(collapseRepeats('Runs a copy of a Pod. [1] [1] [1] [1')).toBe('Runs a copy of a Pod. [1]');
+  });
+  it('removes a unit repeated at the end of the text', () => {
+    expect(collapseRepeats('Answer here. and so on and so on and so on and so on')).toBe('Answer here. and so on');
+  });
+  it('keeps legitimate distinct markers and code', () => {
+    expect(collapseRepeats('A [1][2]. B [2].')).toBe('A [1][2]. B [2].');
+    expect(collapseRepeats('Use `x[1][1]` here [1].')).toBe('Use `x[1][1]` here [1].');
+  });
+});
+
 describe('finaliseAnswer', () => {
+  it('recovers the real qwen2.5:3b failure: two sentences then a marker loop', () => {
+    const raw = 'A Kubernetes DaemonSet is a top-level resource. It ensures Nodes run a copy of a Pod. ' + '[1] '.repeat(60) + '[1';
+    expect(finaliseAnswer(raw, 1, true)).toBe('A Kubernetes DaemonSet is a top-level resource. It ensures Nodes run a copy of a Pod. [1]');
+  });
+
   it('trims to a boundary before dropping markers so the last sentence survives', () => {
     const text = 'First point [1]. Second point [2]';
     expect(finaliseAnswer(text, 1, true)).toBe('First point [1]. Second point');

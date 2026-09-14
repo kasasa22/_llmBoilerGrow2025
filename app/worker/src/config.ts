@@ -31,6 +31,8 @@ const Schema = z.object({
   MODEL_NAME: z.string().default('qwen2.5:7b'),
   OLLAMA_KEEP_ALIVE: z.string().default('30m'),
   OLLAMA_NUM_CTX: z.coerce.number().int().positive().default(4096),
+  OLLAMA_REPEAT_PENALTY: z.coerce.number().positive().default(1.15),
+  OLLAMA_REPEAT_LAST_N: z.coerce.number().int().positive().default(128),
   MODEL_WARMUP_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(1),
 

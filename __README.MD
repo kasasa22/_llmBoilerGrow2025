@@ -11,16 +11,16 @@ Forked from `growAssignments/_llmBoilerGrow2025` — upstream commits preserved.
 
 ## Live demo endpoints
 
-Populated from `terraform output` after `apply`. Sample IPs from the current live deployment (Civo LON1, CPU node pool):
+Populated from `terraform output` after `apply`. IPs from the live deployment as of 2026-09-14 (Civo LON1, one `g4s.kube.large` CPU node, `qwen2.5:3b`); they change whenever the cluster is rebuilt:
 
 | Purpose | Example |
 |---|---|
-| **UI (Next.js 15 + React 19)** | <http://74.220.21.49> |
-| Flask API root | <http://74.220.17.121> |
-| POST endpoint | `http://74.220.17.121/api/chat` (direct) or `http://74.220.21.49/api/chat` (proxied via Next.js route handler) |
-| Job stream (SSE) | `http://74.220.17.121/api/jobs/<id>/stream` |
-| Inngest dashboard | <http://74.220.22.19:8288> |
-| Open WebUI (Ollama) | <http://74.220.22.216> |
+| **UI (Next.js 15 + React 19)** | <http://74.220.20.76> |
+| Flask API root | <http://74.220.16.132> |
+| POST endpoint | `http://74.220.16.132/api/chat` (direct) or `http://74.220.20.76/api/chat` (proxied via Next.js route handler) |
+| Job stream (SSE) | `http://74.220.16.132/api/jobs/<id>/stream` |
+| Inngest dashboard | <http://74.220.23.86:8288> |
+| Open WebUI (Ollama) | <http://74.220.23.41> |
 
 ## Architecture
 
@@ -446,6 +446,8 @@ Defaults shown are for CPU deploys (`ENABLE_GPU=false`). GPU deploys relax `NETW
 | `OLLAMA_KEEP_ALIVE` | `30m` (worker) / `1h` (Ollama) | worker + ollama | Keep models resident between requests |
 | `OLLAMA_NUM_CTX` | `4096` | worker | Context window for the synthesis call; must equal Ollama's `OLLAMA_CONTEXT_LENGTH` or the model reloads between calls |
 | `OLLAMA_NUM_PARALLEL` | `1` | ollama | One slot so consecutive agent turns reuse the KV prefix cache |
+| `OLLAMA_REPEAT_PENALTY` | `1.15` | worker | Repetition penalty on the synthesis call; small models otherwise loop on `[1] [1] [1]…` |
+| `OLLAMA_REPEAT_LAST_N` | `128` | worker | Window the penalty looks back over |
 | `WORKER_CONCURRENCY` | `1` | worker | Inngest concurrency limit; keep at 1 on CPU so runs don't share the model |
 | `INNGEST_RETRIES` | `1` | worker | Function retries. The network step never throws on its own, so a retry only ever covers infrastructure failures such as a rolling restart mid-invocation |
 | `ALLOWED_DOMAINS` | *(empty = open web)* | worker | CSV eTLD+1 allowlist |
@@ -815,6 +817,9 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
 
 - **`webSearch` returns 0 results.**
   DuckDuckGo scraper is broken this week. Set `TAVILY_API_KEY` GH secret to a free-tier Tavily key.
+
+- **Answer stops after a sentence or two and ends with `[1] [1`.**
+  A small model (`qwen2.5:3b`) fell into a repetition loop on the citation marker. Three guards handle it: `OLLAMA_REPEAT_PENALTY` on the synthesis call, a stream reader that aborts as soon as a short unit repeats six times (`doneReason: repetition` in the worker log), and cleanup that collapses repeated markers. If it still happens often, switch `cpu_model_name` to `qwen2.5:7b`; the node runs it at about 4 tok/s.
 
 - **Answer is the "I found N source(s) but ran out of time" text.**
   The direct synthesis call did not finish inside `SYNTHESIS_TIMEOUT_MS`. Check `kubectl -n apps logs deploy/worker | grep synthesis.direct` for `tokensPerSecond`; on a 4-vCPU node expect 4-8. Raise `SYNTHESIS_TIMEOUT_MS` (and `MAX_WALL_CLOCK_MS`) or lower `MAX_TOKENS_PER_CALL` / `RAG_TOP_K`.
