@@ -92,9 +92,9 @@ describe('formatElapsed', () => {
 
 describe('typicalTimeHint', () => {
   it('shows a shorter estimate in prod env', () => {
-    expect(typicalTimeHint('prod')).toMatch(/5-10 seconds/);
+    expect(typicalTimeHint('prod')).toMatch(/20-60 seconds/);
   });
   it('shows a longer estimate in demo env', () => {
-    expect(typicalTimeHint('demo')).toMatch(/30-90 seconds/);
+    expect(typicalTimeHint('demo')).toMatch(/3-6 minutes/);
   });
 });

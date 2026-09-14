@@ -32,7 +32,11 @@ export interface RouterInputs {
 
 export type RouterDecision =
   | { next: NextPhase; advanced: boolean }
-  | { next: 'done'; advanced: true; reason: 'wall_clock' | 'aborted' | 'call_budget' | 'errors' | 'finalAnswer' };
+  | {
+      next: 'done';
+      advanced: true;
+      reason: 'wall_clock' | 'aborted' | 'call_budget' | 'errors' | 'finalAnswer' | 'skip_synthesis';
+    };
 
 /**
  * Given the current state, return the next phase the router should hand off to
@@ -66,7 +70,7 @@ export function decideNextPhase(inputs: RouterInputs): RouterDecision {
       state.sources.length >= config.minSources && state.rawEvidence.length >= config.minEvidence;
     if (!ready) return { next: 'research', advanced: false };
     if (config.skipSynthesis) {
-      return { next: 'done', advanced: true, reason: 'finalAnswer' };
+      return { next: 'done', advanced: true, reason: 'skip_synthesis' };
     }
     return { next: config.skipAnalysis ? 'synthesis' : 'analysis', advanced: true };
   }

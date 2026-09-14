@@ -1,6 +1,8 @@
 # 003. AgentKit multi-agent Network vs a single agent with tools
 
-- Status: Accepted
+- Status: Accepted, amended by ADR-010 (the network now runs inside a single Inngest
+  step, and on CPU deploys the Synthesis phase is a direct completion rather than the
+  SynthesisAgent)
 - Date: 2026-09-14
 - Deciders: Trevor Kasasa
 - Tags: architecture, agents

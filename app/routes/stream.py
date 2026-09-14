@@ -68,12 +68,15 @@ def _generate(*, job_id: str, last_seq: int) -> Iterator[bytes]:
     yield b": stream open\n\n"
 
     seen_seqs: set[int] = set()
+    terminal_replayed = False
 
     for entry in bus.get_log_tail(job_id=job_id, max_entries=cfg.sse_replay_max):
         try:
             envelope = decode_envelope(entry)
         except ValueError:
             continue
+        if envelope.phase in ("done", "error") and envelope.data.get("terminal") is not False:
+            terminal_replayed = True
         if envelope.seq is not None and envelope.seq <= last_seq:
             continue
         if envelope.seq is not None:
@@ -86,10 +89,14 @@ def _generate(*, job_id: str, last_seq: int) -> Iterator[bytes]:
             envelope = decode_envelope(final_raw)
             if envelope.seq is None or envelope.seq not in seen_seqs:
                 yield _to_sse(envelope.raw, envelope.phase, envelope.seq)
-            yield _to_sse(_synthetic_done_payload(job_id), "done", None)
+            if not terminal_replayed:
+                yield _to_sse(_synthetic_done_payload(job_id), "done", None)
             return
         except ValueError:
             log.warning("stream.final.decode_failed", extra={"job_id": job_id})
+
+    if terminal_replayed:
+        return
 
     # Live subscribe. Use pubsub with a poll timeout so we can emit keepalives.
     pubsub = bus._pubsub_client.pubsub(ignore_subscribe_messages=True)  # noqa: SLF001

@@ -15,9 +15,9 @@ Populated from `terraform output` after `apply`. Sample IPs from the current liv
 
 | Purpose | Example |
 |---|---|
-| **Primary UI (Next.js 15 + React 19)** | <http://74.220.21.49> |
-| Vanilla UI + API (baseline) | <http://74.220.17.121> |
-| POST endpoint | `http://74.220.17.121/api/chat` (direct) or `http://74.220.21.49/api/chat` (proxied) |
+| **UI (Next.js 15 + React 19)** | <http://74.220.21.49> |
+| Flask API root | <http://74.220.17.121> |
+| POST endpoint | `http://74.220.17.121/api/chat` (direct) or `http://74.220.21.49/api/chat` (proxied via Next.js route handler) |
 | Job stream (SSE) | `http://74.220.17.121/api/jobs/<id>/stream` |
 | Inngest dashboard | <http://74.220.22.19:8288> |
 | Open WebUI (Ollama) | <http://74.220.22.216> |
@@ -56,7 +56,6 @@ flowchart LR
 
   browser -->|"POST + SSE"| web
   web -->|"proxy /api/*"| flask
-  browser -.->|"vanilla baseline"| flask
   chat_route -->|"send event"| inngest
   inngest -->|"POST /api/inngest"| worker
   network -->|"OpenAI-compat /v1"| ollama
@@ -120,6 +119,36 @@ sequenceDiagram
 - *"What is a Kubernetes DaemonSet?"*
 - *"What are the main features of Civo GPU Kubernetes clusters?"*
 
+### Sample run (CPU, `qwen2.5:7b`, laptop 4-core i7)
+
+`POST /api/chat {"query":"Compare FastAPI vs Express"}` → 313 s wall clock, 17 SSE events, each stage exactly once:
+
+```text
+job.started → tool.called(webSearch) → research.search_completed → tool.result
+→ tool.called(fetchUrl) → research.source_found → rag.chunks_indexed → tool.result
+→ tool.called(fetchUrl) → research.source_found → rag.chunks_indexed → tool.result
+→ agent.transition(research→synthesis) → synthesis.started → rag.retrieved
+→ synthesis.answer_ready → final → done
+```
+
+`final.data` (abridged; `partial: false`, `mode: "direct"`, 2 citations):
+
+```markdown
+| Dimension          | FastAPI (Python)                     | Express (Node.js)                        |
+|--------------------|--------------------------------------|------------------------------------------|
+| Performance        | Extremely fast APIs                  | Excellent for I/O-heavy apps             |
+| Learning Curve     | Easy if familiar with Python         | Easy if familiar with JavaScript         |
+| Ecosystem          | Rich Python AI/ML libraries          | Massive npm package support              |
+| Best Use Cases     | APIs, microservices, ML integrations | Real-time apps, SaaS, e-commerce         |
+
+### Which to Choose
+- **FastAPI** is ideal for projects that require high performance, especially in
+  data-intensive or AI-powered applications. ...
+- **Express** is better suited for real-time applications, SaaS, and e-commerce ...
+```
+
+Citations: `[1]` slincom.com "Backend Battle 2025: FastAPI vs Express Explained", `[2]` kunalganglani.com "FastAPI vs Express 2026". Synthesis alone: 825 prompt tokens, 250 output tokens, 158 s at 3.4 tok/s. The research turns after the first reused 516 cached prefix tokens (Ollama `cached n_tokens`).
+
 ### What it deliberately doesn't do
 
 - **Multi-turn conversation**: each `POST /api/chat` is single-shot. There's no session or memory across queries — by design, so responses stay reproducible under `Idempotency-Key`. Cross-session memory is called out as the next upgrade path in [ADR-006](docs/adr/006-hybrid-rag-in-memory-vs-vectordb.md).
@@ -128,11 +157,14 @@ sequenceDiagram
 
 ### Agent architecture
 
-A 3-agent [AgentKit Network](https://agentkit.inngest.com/concepts/networks) behind a hybrid router.
+An [AgentKit Network](https://agentkit.inngest.com/concepts/networks) behind a hybrid router, followed by a direct synthesis completion. The whole pipeline runs inside **one** Inngest step (`run-agent-network`) so it executes exactly once per job; see [ADR-010](docs/adr/010-single-step-network-and-direct-synthesis.md) for why that matters.
 
-- **ResearchAgent** — tools `webSearch`, `fetchUrl`. Gathers 2-4 primary sources.
-- **AnalysisAgent** — tools `extractClaim`, `rateSourceCredibility`. Emits atomic claims + credibility scores.
-- **SynthesisAgent** — tool `submitAnswer` (terminal). Writes the markdown answer with `[n]` citations.
+- **ResearchAgent** — tools `webSearch`, `fetchUrl`. Gathers 1-2 primary sources on CPU deploys (2 for comparison questions), up to 4 on GPU. Every fetched page is chunked and embedded into the per-job RAG store.
+- **AnalysisAgent** *(optional, `SKIP_ANALYSIS=false`)* — tools `extractClaim`, `rateSourceCredibility`. Emits atomic claims + credibility scores.
+- **SynthesisAgent** *(optional, `SKIP_SYNTHESIS_AGENT=false`)* — tool `submitAnswer` (terminal). Receives the retrieved evidence in its system prompt and writes the answer as a tool call.
+- **Direct synthesis** *(default on CPU, and the fallback whenever the SynthesisAgent exits without `submitAnswer`)* — one plain `POST /api/chat` on Ollama with the top-K retrieved chunks, numbered sources, a `num_predict` cap and a timeout carved out of the wall clock (`SYNTHESIS_TIMEOUT_MS`). Small models are far more reliable at writing 300 words of prose than at packing them into JSON tool-call arguments, so this path produces the cited answer on the CPU deployment.
+
+The default CPU pipeline is therefore **ResearchAgent → direct synthesis**. Flip `SKIP_ANALYSIS` / `SKIP_SYNTHESIS_AGENT` to `false` on a GPU node to run the full Research → Analysis → Synthesis network.
 
 ### Agent decision policy
 
@@ -149,12 +181,13 @@ The SynthesisAgent follows a parallel policy: produce a markdown answer 200-500 
 
 Router transitions (all thresholds env-tunable via `NETWORK_MIN_*` / `NETWORK_MAX_*`):
 
-- `research → analysis` when `sources ≥ NETWORK_MIN_SOURCES && rawEvidence ≥ NETWORK_MIN_EVIDENCE`.
+- `research → analysis` when `sources ≥ NETWORK_MIN_SOURCES && rawEvidence ≥ NETWORK_MIN_EVIDENCE` (the source floor rises to 2 for comparison questions when `MAX_FETCHES ≥ 2`).
 - `analysis → synthesis` when `claims ≥ NETWORK_MIN_CLAIMS || iteration ≥ NETWORK_MAX_ANALYSIS_ITERS`.
 - Set `SKIP_ANALYSIS=true` to bypass the analysis phase (used on CPU deploys where each model call is expensive).
-- Terminate on: `submitAnswer` called, `callCount ≥ NETWORK_MAX_CALLS`, `wall_clock ≥ NETWORK_WALL_CLOCK_MS`, or `errors.length ≥ 3`.
+- Set `SKIP_SYNTHESIS_AGENT=true` to end the network as soon as research is ready and write the answer with the direct synthesis completion instead of the SynthesisAgent (default on CPU).
+- Terminate on: `submitAnswer` called, `callCount ≥ NETWORK_MAX_CALLS`, research wall clock exhausted (`MAX_WALL_CLOCK_MS`), or `errors.length ≥ 3`. Whatever the exit reason, if at least one source was fetched the direct synthesis still runs (its own `SYNTHESIS_TIMEOUT_MS` clock) and a cited answer is produced.
 
-Model: `qwen2.5:7b` on CPU deploys (~5-8 tok/s), `qwen3:8b` on GPU deploys (~40-80 tok/s). Toggle via `ENABLE_GPU` (see [ADR-004](docs/adr/004-model-choice-qwen3-8b.md)).
+Model: `qwen2.5:7b` on CPU deploys (~5-8 tok/s), `qwen3:8b` on GPU deploys (~40-80 tok/s). Toggle via `ENABLE_GPU` (see [ADR-004](docs/adr/004-model-choice-qwen3-8b.md)). The worker pre-loads both models at boot and Ollama keeps them resident (`OLLAMA_KEEP_ALIVE`), so the first demo query is not the slowest.
 
 ### Network state machine
 
@@ -212,12 +245,18 @@ RAG_EMBED_MODEL=nomic-embed-text
 INNGEST_EVENT_KEY=dev-key
 LOG_LEVEL=info
 SKIP_ANALYSIS=true
+SKIP_SYNTHESIS_AGENT=true
 NETWORK_MIN_SOURCES=1
+NETWORK_MIN_EVIDENCE=1
 NETWORK_MAX_CALLS=6
 MAX_TOOL_CALLS=4
 MAX_FETCHES=2
 MAX_SEARCH_QUERIES=1
-MAX_WALL_CLOCK_MS=180000
+MAX_WALL_CLOCK_MS=240000
+SYNTHESIS_TIMEOUT_MS=240000
+MAX_TOKENS_PER_CALL=450
+RAG_TOP_K=4
+OLLAMA_KEEP_ALIVE=1h
 EOF
 
 # 2. Bring the full stack up (ollama + redis + inngest dev + worker + flask + web)
@@ -228,8 +267,8 @@ make pull-models
 # Override to a bigger model on GPU: `CHAT_MODEL=qwen3:8b make pull-models`
 
 # 4. Open the UI
-#    Next.js UI (primary):    http://localhost:3001
-#    Vanilla UI (baseline):   http://localhost:8080
+#    Next.js UI:              http://localhost:3001
+#    Flask API root:          http://localhost:8080   (JSON — no HTML front-end)
 #    Inngest dashboard:       http://localhost:8288
 #    Ollama Open WebUI:       http://localhost:3000
 #    Ollama server (raw API): http://localhost:11434
@@ -299,7 +338,7 @@ terraform apply     # ~10-15 min: cluster boot + helm releases + model pull
 
 ```bash
 terraform output
-#   chat_url              = "<lb-ip>"       # Flask API + baseline UI
+#   chat_url              = "<lb-ip>"       # Flask API (JSON only)
 #   web_url               = "<lb-ip>"       # Next.js UI  ← primary demo URL
 #   inngest_dashboard_url = "http://<lb-ip>:8288"
 #   ollama_ui_service_ip  = "<lb-ip>"       # Open WebUI
@@ -387,15 +426,25 @@ Defaults shown are for CPU deploys (`ENABLE_GPU=false`). GPU deploys relax `NETW
 | `MODEL_NAME` | `qwen2.5:7b` | app + worker | Chat model (auto: `qwen3:8b` when `ENABLE_GPU=true`) |
 | `APP_ENV` | `demo` | web | Rendered in the UI badge; `prod` on GPU deploys |
 | `SKIP_ANALYSIS` | `true` | worker | Bypass the Analysis phase (single model call cost matters on CPU) |
+| `SKIP_SYNTHESIS_AGENT` | `true` | worker | End the network after research and write the answer with the direct completion (ADR-010) |
 | `RAG_ENABLED` | `true` | worker | Kill-switch → fall back to first-8k-chars |
 | `RAG_EMBED_MODEL` | `nomic-embed-text` | worker | Ollama embedding model |
+| `RAG_TOP_K` | `4` | worker | Chunks handed to synthesis (~900 chars each; every 100 prompt tokens costs ~7 s on a 4-vCPU node) |
 | `NETWORK_MAX_CALLS` | `6` | worker | Router callCount cap |
-| `NETWORK_WALL_CLOCK_MS` | `180000` | worker | `network.run` deadline |
-| `NETWORK_MIN_SOURCES` | `1` | worker | Research→Synthesis handoff floor |
+| `NETWORK_MIN_SOURCES` | `1` | worker | Research handoff floor (auto-raised to 2 for comparison questions) |
 | `MAX_TOOL_CALLS` | `4` | worker | Budget guard |
 | `MAX_FETCHES` | `2` | worker | Per-run fetchUrl cap |
 | `MAX_SEARCH_QUERIES` | `1` | worker | Per-run webSearch cap |
-| `MAX_WALL_CLOCK_MS` | `180000` | worker | Total wall-clock per run |
+| `SEARCH_RESULTS` | `5` | worker | Results returned per webSearch call |
+| `SEARCH_SNIPPET_CHARS` | `160` | worker | Snippet length handed back to the model per result (prompt size) |
+| `MAX_WALL_CLOCK_MS` | `240000` | worker | Research-phase budget (agent loop). May overrun by one in-flight model call |
+| `SYNTHESIS_TIMEOUT_MS` | `240000` | worker | Separate budget for the synthesis completion. Streamed, so whatever was written when it expires is kept |
+| `MAX_TOKENS_PER_CALL` | `450` | worker | `num_predict` for every model call; ~250 words of answer |
+| `OLLAMA_KEEP_ALIVE` | `30m` (worker) / `1h` (Ollama) | worker + ollama | Keep models resident between requests |
+| `OLLAMA_NUM_CTX` | `4096` | worker | Context window for the synthesis call; must equal Ollama's `OLLAMA_CONTEXT_LENGTH` or the model reloads between calls |
+| `OLLAMA_NUM_PARALLEL` | `1` | ollama | One slot so consecutive agent turns reuse the KV prefix cache |
+| `WORKER_CONCURRENCY` | `1` | worker | Inngest concurrency limit; keep at 1 on CPU so runs don't share the model |
+| `INNGEST_RETRIES` | `1` | worker | Function retries. The network step never throws on its own, so a retry only ever covers infrastructure failures such as a rolling restart mid-invocation |
 | `ALLOWED_DOMAINS` | *(empty = open web)* | worker | CSV eTLD+1 allowlist |
 | `DENIED_DOMAINS` | *(empty)* | worker | Applied AFTER allowlist |
 | `LOG_LEVEL` | `info` | app + worker | JSON log verbosity |
@@ -437,8 +486,12 @@ enforced by `BudgetTracker` (`app/worker/src/budget.ts`):
 
 `MAX_TOOL_CALLS` · `MAX_FETCHES` · `MAX_SEARCH_QUERIES` · `MAX_CONTEXT_CHARS` · `MAX_WALL_CLOCK_MS` · `MAX_TOKENS_PER_CALL`.
 
-On any limit hit, the run emits `BUDGET_EXCEEDED`, then a **forced-synthesis** path
-produces a partial answer from evidence-so-far and terminates with `final: partial=true`.
+Two separate clocks: `MAX_WALL_CLOCK_MS` bounds the research loop and
+`SYNTHESIS_TIMEOUT_MS` bounds the answer completion. On any research limit the run
+emits `budget.hit`, the loop stops, and the direct synthesis still writes a cited
+answer from the evidence gathered so far. The synthesis call is streamed: if its clock
+expires mid-answer, the prose written so far is trimmed to the last sentence and
+returned with `final.partial=true` and a one-line note, rather than discarded.
 
 To adjust per environment: change the Terraform var → Helm value chain (`env` block in
 `infra/helm/worker/values.yaml`) rather than `helm upgrade --set` in-place.
@@ -630,9 +683,19 @@ Python-first and would force us to rebuild `createNetwork`. AgentKit gives durab
 
 ### Why a multi-agent Network vs one agent with tools
 
-Even for one agent, `createNetwork` gives typed state + a router seam + free
-step-boundary durability. Cost is one extra router prompt; benefit is testable phase
-transitions and a screenshot-worthy Inngest step tree. Link: [ADR-003](docs/adr/003-inngest-agentkit-multi-agent-network.md).
+Even for one agent, `createNetwork` gives typed state + a router seam. Cost is one
+extra router prompt; benefit is testable phase transitions. Link: [ADR-003](docs/adr/003-inngest-agentkit-multi-agent-network.md).
+
+### Why the network runs in one Inngest step, and why synthesis is a plain completion
+
+AgentKit makes every model call an Inngest step but runs tool handlers as ordinary
+code, and Inngest re-invokes the function after each step. Left as-is, the tools, the
+Redis publishes and the synthesis call re-ran on every replay: four full cycles per
+job on CPU, and only the fallback text as an answer. Running the loop inside one
+`step.run` in a detached async context executes it exactly once. Writing the answer
+with a single `/api/chat` completion instead of a `submitAnswer` tool call is the
+difference between a cited 300-word answer and a malformed JSON blob on a 7B model.
+Link: [ADR-010](docs/adr/010-single-step-network-and-direct-synthesis.md).
 
 ### Why self-hosted Inngest vs Inngest Cloud
 
@@ -668,15 +731,14 @@ connections per worker at near-zero CPU cost while blocked on Redis. Trade-off: 
 accidental blocking calls — we use `redis-py` with monkey-patched sockets and no other
 blockers in the request path.
 
-### Why Next.js 15 App Router on top of a vanilla-JS-capable backend
+### Why Next.js 15 App Router as the sole front-end
 
-Two UIs live side-by-side. The vanilla `app/templates/index.html` (~450 lines,
-zero build step) proves the async SSE architecture works without a framework. The
-Next.js UI at `web/` adds a typed component model — Server Component page shell,
-`"use client"` interactive subtree, TypeScript discriminated union of the 25 SSE
-phases — that scales better as the UI grows. Concretely:
-`web/app/api/chat/route.ts` proxies the browser's POST to Flask server-side so
-**the browser never crosses an origin and no CORS setup is needed**, and
+Flask serves the async API only; the entire user interface is the Next.js app at `web/`. This
+keeps concerns clean: Python owns the async job orchestration, TypeScript owns the reactive UI.
+The Next.js layer brings a typed component model — Server Component page shell, `"use client"`
+interactive subtree, a discriminated-union type over the 25 SSE phases — that scales as the UI
+grows. `web/app/api/chat/route.ts` proxies the browser's POST to Flask server-side so
+**the browser never crosses an origin and no CORS setup is needed on Flask**, and
 `web/app/api/jobs/[id]/stream/route.ts` streams the SSE body straight back. Link:
 [ADR-009](docs/adr/009-nextjs-frontend.md).
 
@@ -691,7 +753,7 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
   - Account RAM quota (63GB) rules out NYC1's L40S SKU (96GB). Stayed on LON1.
   - Civo LON1 A100 40GB inventory returned `gpu_count_exceeded`. Built `ENABLE_GPU=false` toggle so the assignment-required Civo deployment path stays intact on CPU nodes.
   - Replaced boilerplate's manual NVIDIA device-plugin DaemonSet with the NVIDIA GPU Operator Helm chart v25.10.1 per Civo's official docs.
-- **Sun 2026-09-13 evening** — Next.js 15 App Router UI added as an additive service (typed SSE envelope, Server + Client Component split, route handler proxy so no CORS on Flask). Vanilla UI retained as baseline. See [ADR-009](docs/adr/009-nextjs-frontend.md).
+- **Sun 2026-09-13 evening** — Next.js 15 App Router UI added as the front-end (typed SSE envelope, Server + Client Component split, route handler proxy so no CORS on Flask). See [ADR-009](docs/adr/009-nextjs-frontend.md). The original bare-bones vanilla `templates/index.html` was later removed once the Next.js UI covered the same surface, so Flask is now a JSON-only API.
 - **Sun 2026-09-13 evening → Mon 2026-09-14 morning — infrastructure hardening:**
   - Added Terraform Cloud remote state (`cloud {}` block in providers.tf) — CI runners are ephemeral, without persisted state every retry hit `DatabaseNetworkExistsError`.
   - Civo provider's `kubernetes_version` validator rejected the API-returned `talos-v1.5.0` on refresh. Added `-refresh=false` on plan/apply and pinned the version format Civo now returns.
@@ -704,6 +766,12 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
   - `retries: 0` on the Inngest function to stop retry storms during CPU inference. Aggressive budget cuts (`SKIP_ANALYSIS=true`, `MAX_TOOL_CALLS=4`, `MAX_FETCHES=2`).
   - Forced-synthesis fallback wired to fire whenever synthesis returns without `submitAnswer` (previously only fired on the specific `BudgetExceeded` exception).
   - `publish-job-started` wrapped in `step.run` for deterministic single-fire — eliminates the visible "job.started × N" repetition from Inngest step replay.
+- **Mon 2026-09-14 afternoon — replay bug + direct synthesis ([ADR-010](docs/adr/010-single-step-network-and-direct-synthesis.md)):**
+  - Diagnosed why every CPU run showed the search → fetch → synthesis cycle four times and ended on the fallback text: AgentKit turns model calls into Inngest steps but runs tool handlers as plain code, so Inngest's per-step replay re-ran tools, Redis publishes and the out-of-step synthesis call on every invocation. The pre-network wall-clock guard then overwrote finished runs with the timeout message.
+  - Moved the whole network + synthesis into a single `step.run('run-agent-network')`, executed in a detached async context so AgentKit uses plain HTTP instead of nested steps.
+  - Replaced the 60 s `forcedSynthesis` with a first-class direct completion on Ollama's native `/api/chat` (`num_predict`, `num_ctx`, `keep_alive`, timeout carved from the wall clock). The SynthesisAgent now receives the retrieved evidence in its prompt when enabled.
+  - Comparison questions fetch one source per side; `webSearch` no longer lets the model pick a tiny result limit; models are pre-loaded at boot.
+  - 36 new unit tests (110 total in the worker).
 - **Mon 2026-09-14 evening → Tue 2026-09-15** — Loom recording, README polish, final verify + submit.
 
 ## Troubleshooting
@@ -735,8 +803,14 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
 - **`webSearch` returns 0 results.**
   DuckDuckGo scraper is broken this week. Set `TAVILY_API_KEY` GH secret to a free-tier Tavily key.
 
-- **Agent loops without producing a final answer.**
-  qwen2.5:7b on CPU sometimes stalls in synthesis without calling `submitAnswer`. The forced-synthesis fallback kicks in on budget exhaustion and builds an answer from source titles + citations so the UI always renders something.
+- **Answer is the "I found N source(s) but ran out of time" text.**
+  The direct synthesis call did not finish inside `SYNTHESIS_TIMEOUT_MS`. Check `kubectl -n apps logs deploy/worker | grep synthesis.direct` for `tokensPerSecond`; on a 4-vCPU node expect 4-8. Raise `SYNTHESIS_TIMEOUT_MS` (and `MAX_WALL_CLOCK_MS`) or lower `MAX_TOKENS_PER_CALL` / `RAG_TOP_K`.
+
+- **Timeline shows the search → fetch → synthesis cycle repeating.**
+  That was the pre-ADR-010 behaviour: Inngest replayed the non-step agent loop after every step. If you see it again, something outside `step.run('run-agent-network')` is doing work; keep all agent and Redis side effects inside that step.
+
+- **First query of a session is much slower than the rest.**
+  Ollama had to load the model. The worker pre-loads both models at boot and requests `keep_alive`; confirm with `ollama ps` inside the Ollama pod, and check `OLLAMA_KEEP_ALIVE` on the Ollama deployment.
 
 - **SSE closes at 60s idle.**
   Confirm you're seeing `: keep-alive` comments in the stream. Flask sets `X-Accel-Buffering: no` and gunicorn runs with the gevent worker.
@@ -759,7 +833,7 @@ workflow.
 Captured during the Loom walkthrough — see `docs/screenshots/` in the repo.
 
 - `chat-ui.png` — Next.js UI mid-run: agent transitions, RAG chunks indexed, final answer with citations.
-- `inngest.png` — Inngest dashboard step tree: `acquire-lock`, `publish-job-started`, `ResearchAgent`, `SynthesisAgent` with real timings.
+- `inngest.png` — Inngest dashboard step tree: `acquire-lock`, `publish-job-started`, `run-agent-network`, `publish-final`, `mark-done` with real timings.
 - `webui.png` — Open WebUI hitting `qwen2.5:7b` (CPU) directly.
 
 ## Repository map
@@ -778,10 +852,12 @@ _llmBoilerGrow2025/
 │       │   ├── tools/{webSearch,fetchUrl,urlPolicy,extractClaim,
 │       │   │         rateSourceCredibility,submitAnswer}.ts
 │       │   ├── rag/{chunker,embedder,retriever,types}.ts
-│       │   ├── functions/research.ts
+│       │   ├── functions/research.ts   # one step: run-agent-network
+│       │   ├── synthesize.ts ollama.ts # direct synthesis completion
+│       │   ├── detach.ts query.ts      # ALS escape hatch, comparison detection
 │       │   ├── config.ts events.ts errors.ts budget.ts trace.ts
 │       │   ├── logger.ts redis.ts idempotency.ts inngestClient.ts
-│       │   └── state.ts network.ts index.ts
+│       │   └── state.ts network.ts router.ts index.ts
 │       └── package.json tsconfig.json Dockerfile
 ├── web/                       # Next.js 15 App Router UI
 │   ├── app/{layout,page}.tsx  # Server Component page shell
@@ -796,7 +872,7 @@ _llmBoilerGrow2025/
 │   └── tf/*.tf                # cloud {} block → Terraform Cloud remote state
 ├── docs/
 │   ├── errors.md
-│   └── adr/{001..009}-*.md
+│   └── adr/{001..010}-*.md
 ├── eval/                      # dataset + driver + scoring + report
 ├── scripts/                   # smoke.sh smoke-idempotency.sh trace.sh
 ├── .github/workflows/         # deploy.yml lint-*.yml eval.yml

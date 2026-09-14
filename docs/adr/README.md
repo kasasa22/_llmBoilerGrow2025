@@ -15,7 +15,8 @@ format follows [MADR 3.0](https://adr.github.io/madr/).
 | [006](006-hybrid-rag-in-memory-vs-vectordb.md) | Hybrid RAG: in-memory vs vector DB | Accepted | 2026-09-14 |
 | [007](007-idempotency-strategy-outbox-lite.md) | Idempotency strategy: outbox-lite | Accepted | 2026-09-14 |
 | [008](008-ssrf-hardening-in-fetchurl.md) | SSRF hardening in fetchUrl | Accepted | 2026-09-14 |
-| [009](009-nextjs-frontend.md) | Next.js 15 App Router frontend on top of vanilla-JS baseline | Accepted | 2026-09-13 |
+| [009](009-nextjs-frontend.md) | Next.js 15 App Router as the sole frontend (vanilla baseline later removed) | Accepted (amended 2026-09-14) | 2026-09-13 |
+| [010](010-single-step-network-and-direct-synthesis.md) | Run the agent network in one Inngest step; synthesise with a plain completion | Accepted | 2026-09-14 |
 
 ## Status legend
 

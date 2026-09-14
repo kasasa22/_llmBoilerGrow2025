@@ -1,4 +1,3 @@
-"""Flask app factory. Wires blueprints, error handlers, logging."""
 from __future__ import annotations
 
 import logging
@@ -11,26 +10,33 @@ from app.logging_config import setup_logging
 from app.routes.chat import bp as chat_bp
 from app.routes.health import bp as health_bp
 from app.routes.stream import bp as stream_bp
-from app.routes.ui import bp as ui_bp
 
 
 def create_app() -> Flask:
     cfg = get_settings()
     setup_logging(level=cfg.log_level, include_stack=cfg.log_include_stack)
 
-    app = Flask(
-        __name__.split(".")[0],  # "app"
-        template_folder="templates",
-        static_folder="static",
-        static_url_path="/static",
-    )
+    app = Flask(__name__.split(".")[0], static_folder=None)
     app.config["JSON_SORT_KEYS"] = False
     app.config["JSONIFY_PRETTYPRINT_REGULAR"] = False
 
     app.register_blueprint(health_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(stream_bp)
-    app.register_blueprint(ui_bp)
+
+    @app.get("/")
+    def _root():
+        return jsonify(
+            {
+                "service": "llm-boilerplate-app",
+                "message": "This is the async LLM API. The user interface is served by the Next.js web service.",
+                "endpoints": {
+                    "chat": "POST /api/chat",
+                    "stream": "GET /api/jobs/<id>/stream",
+                    "health": "GET /healthz",
+                },
+            }
+        )
 
     _install_error_handlers(app)
 

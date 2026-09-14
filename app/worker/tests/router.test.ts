@@ -15,6 +15,7 @@ const DEFAULTS: RouterConfig = {
   maxAnalysisIters: 2,
   maxCalls: 12,
   skipAnalysis: false,
+  skipSynthesis: false,
 };
 
 function state(overrides: Partial<NetworkState> = {}): NetworkState {
@@ -146,6 +147,30 @@ describe('decideNextPhase — SKIP_ANALYSIS cut-list switch', () => {
     const d = decide(s, 0, { config: cfg });
     expect(d.next).toBe('synthesis');
     expect(d.advanced).toBe(true);
+  });
+});
+
+describe('decideNextPhase — SKIP_SYNTHESIS_AGENT (direct synthesis)', () => {
+  const ready = () =>
+    state({
+      sources: [1, 2, 3].map((i) => ({ id: `s${i}`, url: `https://x.example/${i}`, title: `${i}`, fetchedAt: '' })),
+      rawEvidence: Array.from({ length: 4 }, (_, i) => ({ sourceId: `s${i}`, chunkText: '', tokensApprox: 0 })),
+    });
+
+  it('ends the network once research is ready so the caller can synthesise directly', () => {
+    const d = decide(ready(), 0, { config: { ...DEFAULTS, skipSynthesis: true } });
+    expect(d.next).toBe('done');
+    if (d.next === 'done') expect(d.reason).toBe('skip_synthesis');
+  });
+
+  it('keeps researching until thresholds are met even when synthesis is skipped', () => {
+    const d = decide(state(), 0, { config: { ...DEFAULTS, skipSynthesis: true } });
+    expect(d.next).toBe('research');
+  });
+
+  it('takes precedence over skipAnalysis', () => {
+    const d = decide(ready(), 0, { config: { ...DEFAULTS, skipAnalysis: true, skipSynthesis: true } });
+    expect(d.next).toBe('done');
   });
 });
 

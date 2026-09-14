@@ -118,6 +118,6 @@ export function formatElapsed(ms: number): string {
 }
 
 export function typicalTimeHint(env: string): string {
-  if (env === 'prod') return 'This usually takes 5-10 seconds.';
-  return 'This usually takes 30-90 seconds. First question may be a bit slower.';
+  if (env === 'prod') return 'This usually takes 20-60 seconds on the GPU node.';
+  return 'On the CPU node this takes 3-6 minutes: the model reads each source and then writes the answer. Keep this tab open.';
 }

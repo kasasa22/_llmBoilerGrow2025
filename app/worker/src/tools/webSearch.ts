@@ -34,16 +34,15 @@ export function createWebSearchTool(deps: WebSearchDeps) {
   return createTool({
     name: 'webSearch',
     description:
-      'Search the web for information. Prefer 2-3 focused queries over one broad one. Returns titles, URLs, and short snippets.',
+      'Search the web for information. Returns titles, URLs, and short snippets for the top results. Use a short, literal query.',
     parameters: z.object({
       query: z.string().min(2).max(200).describe('The search query'),
-      limit: z.number().int().min(1).max(8).optional().default(5),
     }),
-    handler: async ({ query, limit }) => {
+    handler: async ({ query }) => {
       deps.budget.onSearch(query);
       deps.budget.onToolCall('webSearch');
       const q = query.trim();
-      const k = limit ?? 5;
+      const k = env.SEARCH_RESULTS;
 
       await publishEvent({
         jobId: deps.jobId,
@@ -67,7 +66,9 @@ export function createWebSearchTool(deps: WebSearchDeps) {
             results: results.map((r) => ({ title: r.title, url: r.url })),
           },
         });
-        return { results };
+        return {
+          results: results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet.slice(0, env.SEARCH_SNIPPET_CHARS) })),
+        };
       } catch (err) {
         logger.warn({ err: (err as Error).message, query: q }, 'webSearch.failed');
         await publishEvent({

@@ -1,9 +1,21 @@
-# 009. Next.js 15 App Router frontend on top of the vanilla-JS baseline
+# 009. Next.js 15 App Router as the sole frontend
 
-- Status: Accepted
+- Status: Accepted (amended 2026-09-14 — vanilla baseline UI removed)
 - Date: 2026-09-13
 - Deciders: Trevor Kasasa
 - Tags: architecture, frontend
+
+## Amendment — 2026-09-14
+
+The original decision (below) introduced the Next.js UI as an *additive* service
+alongside the vanilla `app/templates/index.html` baseline. Once the Next.js UI reached
+feature parity — matching the SSE envelope, adding phase progress, citations, chat
+history — the vanilla UI became dead weight and was removed together with
+`app/static/` and the `ui` Flask blueprint. Flask now serves only the JSON API
+(`POST /api/chat`, `GET /api/jobs/<id>/stream`, `GET /healthz`, `GET /` returns a
+descriptor pointing at the Next.js host).
+
+The context and reasoning below is preserved as-written for historical accuracy.
 
 ## Context and Problem Statement
 

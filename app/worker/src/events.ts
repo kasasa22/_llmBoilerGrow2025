@@ -1,8 +1,3 @@
-/**
- * Shared event-name vocabulary between the worker and the Flask relay.
- * If you rename anything here you MUST update the Flask SSE handler's
- * whitelist AND the browser event listeners in app/static/app.js.
- */
 export const RESEARCH_QUERY_SUBMITTED = 'research/query.submitted';
 
 /** Redis pub/sub envelope phases. Keep string values stable. */

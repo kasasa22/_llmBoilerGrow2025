@@ -28,7 +28,11 @@ const Schema = z.object({
   LOG_INCLUDE_STACK: bool().default(false),
 
   OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
-  MODEL_NAME: z.string().default('qwen3:8b'),
+  MODEL_NAME: z.string().default('qwen2.5:7b'),
+  OLLAMA_KEEP_ALIVE: z.string().default('30m'),
+  OLLAMA_NUM_CTX: z.coerce.number().int().positive().default(4096),
+  MODEL_WARMUP_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  WORKER_CONCURRENCY: z.coerce.number().int().positive().default(1),
 
   REDIS_URL: z.string().default('redis://localhost:6379/0'),
 
@@ -37,6 +41,13 @@ const Schema = z.object({
   INNGEST_EVENT_KEY: z.string().default(''),
   INNGEST_SIGNING_KEY: z.string().default(''),
   INNGEST_SERVE_PATH: z.string().default('/api/inngest'),
+  INNGEST_RETRIES: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(5)
+    .default(1)
+    .transform((n) => n as 0 | 1 | 2 | 3 | 4 | 5),
 
   // Network / router bounds
   NETWORK_MIN_SOURCES: z.coerce.number().int().positive().default(3),
@@ -63,8 +74,9 @@ const Schema = z.object({
   MAX_FETCHES: z.coerce.number().int().positive().default(5),
   MAX_SEARCH_QUERIES: z.coerce.number().int().positive().default(4),
   MAX_CONTEXT_CHARS: z.coerce.number().int().positive().default(20_000),
-  MAX_WALL_CLOCK_MS: z.coerce.number().int().positive().default(90_000),
-  MAX_TOKENS_PER_CALL: z.coerce.number().int().positive().default(2000),
+  MAX_WALL_CLOCK_MS: z.coerce.number().int().positive().default(240_000),
+  SYNTHESIS_TIMEOUT_MS: z.coerce.number().int().positive().default(240_000),
+  MAX_TOKENS_PER_CALL: z.coerce.number().int().positive().default(450),
 
   // Idempotency
   JOB_LOCK_TTL_S: z.coerce.number().int().positive().default(300),
@@ -76,6 +88,8 @@ const Schema = z.object({
   FETCH_URL_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   FETCH_URL_MAX_BYTES: z.coerce.number().int().positive().default(1_048_576),
   SEARCH_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  SEARCH_RESULTS: z.coerce.number().int().min(1).max(8).default(5),
+  SEARCH_SNIPPET_CHARS: z.coerce.number().int().positive().default(160),
   TAVILY_API_KEY: z.string().default(''),
 
   // URL policy

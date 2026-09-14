@@ -4,12 +4,12 @@ output "ollama_ui_service_ip" {
 }
 
 output "chat_url" {
-  description = "Flask + agent LoadBalancer IP (vanilla baseline UI). Point the reviewer here for the raw API + basic UI."
+  description = "Flask API LoadBalancer IP. Serves the JSON-only async API (POST /api/chat, GET /api/jobs/<id>/stream, /healthz). No HTML UI."
   value       = var.deploy_app ? try(data.kubernetes_service.app[0].status.0.load_balancer.0.ingress.0.ip, null) : null
 }
 
 output "web_url" {
-  description = "Next.js frontend LoadBalancer IP (primary UI). Point the reviewer here for the modern React UI."
+  description = "Next.js frontend LoadBalancer IP. Point the reviewer here for the UI."
   value       = var.deploy_app ? try(data.kubernetes_service.web[0].status.0.load_balancer.0.ingress.0.ip, null) : null
 }
 

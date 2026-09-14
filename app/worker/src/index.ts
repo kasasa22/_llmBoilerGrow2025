@@ -14,6 +14,7 @@ import { env } from './config.js';
 import { researchFn } from './functions/research.js';
 import { inngest } from './inngestClient.js';
 import { logger } from './logger.js';
+import { warmModels } from './ollama.js';
 import { getRedis, pingRedis } from './redis.js';
 
 const app = express();
@@ -72,6 +73,7 @@ const server = app.listen(env.PORT, () => {
     { port: env.PORT, ollama: env.OLLAMA_BASE_URL, model: env.MODEL_NAME, inngest: env.INNGEST_BASE_URL },
     'worker.started',
   );
+  void warmModels();
 });
 
 function shutdown(signal: string): void {
