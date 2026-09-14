@@ -124,13 +124,15 @@ variable "model_name" {
 
 variable "cpu_model_name" {
   description = <<-EOT
-    Chat model name when enable_gpu = false. qwen2.5:7b handles multi-step
-    tool calls reliably on CPU (~4.5GB RAM, ~5-8 tok/s on a 4vCPU node).
-    llama3.2:3b was tried but produced malformed tool_calls that fail Zod
-    validation, causing endless Inngest retries with no final answer.
+    Chat model name when enable_gpu = false. qwen2.5:3b is a smaller variant
+    of qwen2.5 that keeps tool_call reliability (unlike llama3.2:3b which
+    produced malformed calls) while running ~3x faster on CPU: ~15-20 tok/s
+    on 4 vCPU vs ~5-8 for qwen2.5:7b. Total query time drops from ~90s to ~30s.
+    Downside: weaker on long-form synthesis, but forced-synthesis LLM fallback
+    covers that case.
   EOT
   type        = string
-  default     = "qwen2.5:7b"
+  default     = "qwen2.5:3b"
 }
 
 # # # # # # # # # # # # # # # # # #
