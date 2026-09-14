@@ -64,20 +64,53 @@ export const researchFn = inngest.createFunction(
       const evidence = new EvidenceStore({ ragEnabled: env.RAG_ENABLED });
       const state = initialState({ jobId, traceId, query: data.query });
 
-      await step.run('mark-running', async () =>
-        setStatus(jobId, {
+      const runStartedAt = await step.run('mark-running', async () => {
+        const started = new Date().toISOString();
+        await setStatus(jobId, {
           state: 'running',
           owner: workerOwnerId(),
-          started_at: new Date().toISOString(),
+          started_at: started,
           model: data.model || env.MODEL_NAME,
-        }),
-      );
+        });
+        return started;
+      });
       await step.run('publish-job-started', async () =>
         publishEvent({ jobId, phase: Phase.JobStarted, data: { query: data.query } }),
       );
 
+      const startedMs = Date.parse(runStartedAt);
+      const alreadyElapsed = Date.now() - startedMs;
+      if (alreadyElapsed >= env.MAX_WALL_CLOCK_MS) {
+        logger.warn(
+          { jobId, alreadyElapsed, MAX_WALL_CLOCK_MS: env.MAX_WALL_CLOCK_MS },
+          'research.wallclock_exceeded_on_replay',
+        );
+        if (!state.finalAnswer && state.sources.length > 0) {
+          await forcedSynthesis(jobId, state, evidence, budget);
+        }
+        const envelope = await step.run('publish-timeout-final', async () =>
+          publishEvent({
+            jobId,
+            phase: Phase.Final,
+            data: {
+              answer: state.finalAnswer,
+              citations: state.citations,
+              partial: true,
+              errors: [{ agent: 'network', msg: 'wall_clock_exceeded_on_replay', at: new Date().toISOString() }],
+            },
+          }),
+        );
+        await step.run('persist-timeout-final', async () => writeFinal(jobId, envelope));
+        await step.run('mark-timeout', async () =>
+          setStatus(jobId, { state: state.finalAnswer ? 'done' : 'failed', ended_at: new Date().toISOString(), terminal_reason: 'wall_clock_replay' }),
+        );
+        await publishEvent({ jobId, phase: Phase.Done, data: { state: 'wall_clock_exceeded' } });
+        return { jobId, timedOut: true };
+      }
+      const remainingMs = Math.max(1000, env.MAX_WALL_CLOCK_MS - alreadyElapsed);
+
       const runAbort = new AbortController();
-      const wallClockTimer = setTimeout(() => runAbort.abort(new Error('MAX_WALL_CLOCK_MS')), env.MAX_WALL_CLOCK_MS);
+      const wallClockTimer = setTimeout(() => runAbort.abort(new Error('MAX_WALL_CLOCK_MS')), remainingMs);
       const heartbeat = setInterval(() => {
         void refreshJobLock(jobId);
       }, env.JOB_LOCK_HEARTBEAT_S * 1000);
