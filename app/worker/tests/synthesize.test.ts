@@ -7,6 +7,7 @@ import {
   citationsFor,
   dropUnknownCitations,
   fallbackAnswer,
+  finaliseAnswer,
   stripDanglingTail,
   stripThinking,
   trimToBoundary,
@@ -113,12 +114,35 @@ describe('dropUnknownCitations', () => {
     expect(dropUnknownCitations('Runs on every node [1][2].', 1)).toBe('Runs on every node [1].');
     expect(dropUnknownCitations('Fact [3]. Other [1].', 2)).toBe('Fact. Other [1].');
   });
+  it('accepts an explicit set of valid numbers', () => {
+    expect(dropUnknownCitations('A [1] B [2] C [4].', new Set([1, 4]))).toBe('A [1] B C [4].');
+  });
   it('keeps valid markers and zero-source text untouched', () => {
     expect(dropUnknownCitations('A [1] and B [2].', 2)).toBe('A [1] and B [2].');
     expect(dropUnknownCitations('No markers here.', 0)).toBe('No markers here.');
   });
   it('does not leave stray spaces before punctuation or at line ends', () => {
     expect(dropUnknownCitations('Line one [2]\nLine two [2] , done [1]', 1)).toBe('Line one\nLine two, done [1]');
+  });
+  it('leaves array indexing and code untouched', () => {
+    expect(dropUnknownCitations('Use items[0] and arr[3] here [3].', 1)).toBe('Use items[0] and arr[3] here.');
+    expect(dropUnknownCitations('Call `list[2]` then see [2].', 1)).toBe('Call `list[2]` then see.');
+    const fence = '```js\nconst x = a[2];\n    indented[9]\n```\nText [2].';
+    expect(dropUnknownCitations(fence, 1)).toBe('```js\nconst x = a[2];\n    indented[9]\n```\nText.');
+  });
+  it('preserves leading indentation of nested lists', () => {
+    const md = '- parent [1]\n    - child [2]\n        - grandchild';
+    expect(dropUnknownCitations(md, 1)).toBe('- parent [1]\n    - child\n        - grandchild');
+  });
+});
+
+describe('finaliseAnswer', () => {
+  it('trims to a boundary before dropping markers so the last sentence survives', () => {
+    const text = 'First point [1]. Second point [2]';
+    expect(finaliseAnswer(text, 1, true)).toBe('First point [1]. Second point');
+  });
+  it('strips a dangling heading left after cleanup', () => {
+    expect(finaliseAnswer('Body [1].\n\n**Which to choose:**\n\n[2]', 1, false)).toBe('Body [1].');
   });
 });
 

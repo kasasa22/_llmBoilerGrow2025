@@ -10,6 +10,7 @@ import type { BudgetTracker } from '../budget.js';
 import { Phase } from '../events.js';
 import { publishEvent } from '../redis.js';
 import type { NetworkState } from '../state.js';
+import { finaliseAnswer } from '../synthesize.js';
 
 export interface SubmitAnswerDeps {
   budget: BudgetTracker;
@@ -37,7 +38,7 @@ export function createSubmitAnswerTool(deps: SubmitAnswerDeps) {
     }),
     handler: async ({ answer, citations }) => {
       deps.budget.onToolCall('submitAnswer');
-      deps.state.finalAnswer = answer;
+      deps.state.finalAnswer = finaliseAnswer(answer, new Set(citations.map((c) => c.n)), false);
       deps.state.citations = citations;
       await publishEvent({
         jobId: deps.jobId,

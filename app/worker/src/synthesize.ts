@@ -98,12 +98,29 @@ export function trimToBoundary(text: string): string {
   return trimmed;
 }
 
-export function dropUnknownCitations(text: string, sourceCount: number): string {
+const CODE_SEGMENT = /(```[\s\S]*?```|`[^`\n]*`)/g;
+
+function mapProse(text: string, fn: (prose: string) => string): string {
   return text
-    .replace(/\[(\d+)\]/g, (match, n: string) => (Number(n) >= 1 && Number(n) <= sourceCount ? match : ''))
-    .replace(/[ \t]+([.,;:])/g, '$1')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/[ \t]{2,}/g, ' ');
+    .split(CODE_SEGMENT)
+    .map((part, i) => (i % 2 === 1 ? part : fn(part)))
+    .join('');
+}
+
+export function dropUnknownCitations(text: string, valid: number | ReadonlySet<number>): string {
+  const isValid = (n: number) => (typeof valid === 'number' ? n >= 1 && n <= valid : valid.has(n));
+  return mapProse(text, (prose) =>
+    prose
+      .replace(/(?<!\w)\[(\d+)\]/g, (match, n: string) => (isValid(Number(n)) ? match : ''))
+      .replace(/[ \t]+([.,;:])/g, '$1')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/(?<=\S)[ \t]{2,}/g, ' '),
+  );
+}
+
+export function finaliseAnswer(text: string, valid: number | ReadonlySet<number>, truncated: boolean): string {
+  const bounded = truncated ? trimToBoundary(text) : text;
+  return stripDanglingTail(dropUnknownCitations(bounded, valid));
 }
 
 const DANGLING_LINE = /^(#{1,6}\s.*|\*\*[^*]+\*\*:?|(\[\d+\]\s*)+|[-*]\s*)$/;
@@ -177,6 +194,7 @@ export async function directSynthesis(deps: DirectSynthesisDeps): Promise<Direct
     data: { agent: 'DirectSynthesis', k: chunks.length, topScore: chunks[0]?.score ?? 0, minScore: env.RAG_MIN_SIMILARITY },
   });
 
+  const citations = citationsFor(state.sources);
   const messages = buildSynthesisMessages({ query: state.query, sources: state.sources, chunks, claims: state.claims });
   const promptChars = messages.reduce((n, m) => n + m.content.length, 0);
   const timeoutMs = Math.max(20_000, deps.deadlineMs);
@@ -186,8 +204,7 @@ export async function directSynthesis(deps: DirectSynthesisDeps): Promise<Direct
   try {
     const result = await chat({ messages, timeoutMs, signal: deps.signal });
     truncated = result.doneReason !== 'stop';
-    const clean = dropUnknownCitations(stripThinking(result.content), state.sources.length);
-    const text = stripDanglingTail(truncated ? trimToBoundary(clean) : clean);
+    const text = finaliseAnswer(stripThinking(result.content), citations.length, truncated);
     logger.info(
       {
         jobId,
@@ -218,7 +235,7 @@ export async function directSynthesis(deps: DirectSynthesisDeps): Promise<Direct
     answer += '\n\n*The answer was cut short by the time budget; the sources below cover the rest.*';
   }
   state.finalAnswer = answer ?? fallbackAnswer(state);
-  state.citations = citationsFor(state.sources);
+  state.citations = citations;
 
   await publishEvent({
     jobId,
