@@ -110,6 +110,24 @@ sequenceDiagram
 
 ## The agent
 
+**What it does (for a user):** takes a factual research question, searches the open web for authoritative sources, reads the top pages, and returns a cited answer as markdown with `[1]`, `[2]` reference links you can click. Not a general chatbot — it's optimised for "explain / define / compare" style queries where a cited answer beats a raw LLM guess.
+
+### Sample queries that work well
+
+- *"What is Ollama and what does it do?"*
+- *"What is Server-Sent Events and when should you use it?"*
+- *"Compare Redis Streams and Redis Pub/Sub."*
+- *"What is a Kubernetes DaemonSet?"*
+- *"What are the main features of Civo GPU Kubernetes clusters?"*
+
+### What it deliberately doesn't do
+
+- **Multi-turn conversation**: each `POST /api/chat` is single-shot. There's no session or memory across queries — by design, so responses stay reproducible under `Idempotency-Key`. Cross-session memory is called out as the next upgrade path in [ADR-006](docs/adr/006-hybrid-rag-in-memory-vs-vectordb.md).
+- **Opinion or preference queries** ("what's the best…?"): the agent will search, but small-model synthesis is unreliable at value judgements.
+- **Real-time data** (stock prices, live scores): source pages may be stale.
+
+### Agent architecture
+
 A 3-agent [AgentKit Network](https://agentkit.inngest.com/concepts/networks) behind a hybrid router.
 
 - **ResearchAgent** — tools `webSearch`, `fetchUrl`. Gathers 3-6 primary sources.
@@ -411,6 +429,103 @@ produces a partial answer from evidence-so-far and terminates with `final: parti
 
 To adjust per environment: change the Terraform var → Helm value chain (`env` block in
 `infra/helm/worker/values.yaml`) rather than `helm upgrade --set` in-place.
+
+## API reference
+
+### POST /api/chat
+
+Submits a research query. Non-blocking: returns immediately with a `job_id` and a stream URL. The actual agent runs in the background via Inngest.
+
+**Request:**
+
+```http
+POST /api/chat
+Content-Type: application/json
+Idempotency-Key: <optional; 8..128 chars, [A-Za-z0-9._~-]>
+
+{
+  "query": "What is Ollama and what does it do?"
+}
+```
+
+**Validation:**
+
+- `query` — required, string, 1..2000 chars after trim.
+- `Idempotency-Key` — optional; if omitted, dedup uses `sha256(normalized_query)`.
+
+**Responses:**
+
+| Status | When | Body | Headers |
+|---|---|---|---|
+| **202 Created** | Fresh submission | `{"job_id","stream_url","idempotent":false}` | `Idempotency-Status: created`, `x-trace-id: <32-hex>` |
+| **200 OK** | Duplicate: same key, same body | `{"job_id","stream_url","idempotent":true}` | `Idempotency-Status: replayed` |
+| **400 Bad Request** | Missing/malformed `query` or `Idempotency-Key` | `{"error":"...", "detail":"..."}` | — |
+| **409 Conflict** | Same key, different body | `{"error":"idempotency_key_reuse"}` | — |
+
+### GET /api/jobs/{job_id}/stream
+
+Server-Sent Events stream for a submitted job. One connection per browser tab; the server sends every event published to `job:{id}:events` in Redis, plus a replay of the log for any events that fired before the subscription connected.
+
+**Response** (`Content-Type: text/event-stream`, `X-Accel-Buffering: no`):
+
+```text
+id: 1
+event: job.started
+data: {"seq":1,"phase":"job.started","trace_id":"...","job_id":"...","ts":"...","data":{"query":"..."}}
+
+id: 2
+event: tool.called
+data: {"seq":2,"phase":"tool.called","data":{"tool":"webSearch","args":{...}}}
+
+...
+
+id: 14
+event: final
+data: {"seq":14,"phase":"final","data":{"answer":"...", "citations":[{"n":1,"url":"..."}]}}
+
+id: 15
+event: done
+data: {"seq":15,"phase":"done","data":{"state":"done"}}
+```
+
+Every 15s a `: keep-alive` comment is sent so Civo's LB idle timeout doesn't close the connection.
+
+### GET /healthz
+
+Liveness probe. Returns `200 OK` with `{"status":"ok"}` when the Flask app can reach Redis.
+
+### Response delivery mechanism (why SSE)
+
+The brief mentions "webhooks, polling, or WebSocket" — we chose **Server-Sent Events**:
+
+| Option | Chosen? | Why |
+|---|---|---|
+| **SSE** | ✅ | Unidirectional (server → client) matches the "job publishes events" pattern. Works over plain HTTP, browser-native `EventSource`, Civo LB compatible. No CORS complications with same-origin proxy. |
+| Polling | ❌ | Cheap to implement but awful UX for 30-60s pipelines. Would need `GET /api/jobs/{id}` every 500ms. |
+| Webhook | ❌ | Requires the client to expose an HTTP endpoint — impossible for browsers. Would fit a service-to-service integration but not this brief. |
+| WebSocket | ❌ | Overkill: we don't need client → server messages after the initial POST. Adds an upgrade handshake, sticky routing on the LB, and reconnection code. SSE covers the same use case with less machinery. |
+
+## Verify end-to-end
+
+The brief explicitly asks that the app can communicate with the in-cluster Ollama server. Quick verification chain, top to bottom:
+
+```bash
+# 1. Cluster is healthy
+kubectl get pods -A | grep -v Running   # expect no output
+
+# 2. Ollama is serving the chat model
+kubectl -n ollama exec -it deploy/ollama -- ollama list
+# → qwen2.5:7b (or qwen3:8b on GPU) + nomic-embed-text
+
+# 3. Worker → Ollama connectivity from inside the cluster
+kubectl -n apps exec -it deploy/worker -- \
+  wget -qO- http://ollama.ollama.svc.cluster.local:11434/api/tags
+# → JSON list of models
+
+# 4. Flask → Inngest → Worker end-to-end from outside
+FLASK_URL=http://$(terraform -chdir=infra/tf output -raw chat_url) scripts/smoke.sh
+# → posts a query, tails SSE, asserts a final event with citations arrives
+```
 
 ## Error codes
 
