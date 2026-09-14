@@ -52,8 +52,8 @@ export function buildEvidenceBlock(input: SynthesisInput): string {
 export function buildSynthesisMessages(input: SynthesisInput): ChatMessage[] {
   const comparison = isComparisonQuery(input.query);
   const structure = comparison
-    ? 'This is a comparison question: after the opening sentence, give a markdown table with one column per option and one row per dimension, then a short "Which to choose" section.'
-    : 'After the opening sentence, use short headings or bullet points so the answer is easy to scan.';
+    ? 'This is a comparison question. After the opening sentence write a "Which to choose" paragraph of 2-3 sentences, then finish with a markdown table that has one column per option and one row per dimension. The table is the last thing in the answer.'
+    : 'After the opening sentence, use short headings or bullet points so the answer is easy to scan. Never end on a heading; the last line must be a full sentence or a bullet.';
 
   const system = `You write the final answer for a research assistant. Answer the QUESTION using only the EVIDENCE provided.
 
@@ -96,6 +96,21 @@ export function trimToBoundary(text: string): string {
     if (head) return head;
   }
   return trimmed;
+}
+
+const DANGLING_LINE = /^(#{1,6}\s.*|\*\*[^*]+\*\*:?|(\[\d+\]\s*)+|[-*]\s*)$/;
+
+export function stripDanglingTail(text: string): string {
+  const lines = text.trimEnd().split('\n');
+  while (lines.length > 1) {
+    const last = lines[lines.length - 1].trim();
+    if (last === '' || DANGLING_LINE.test(last)) {
+      lines.pop();
+      continue;
+    }
+    break;
+  }
+  return lines.join('\n').trimEnd();
 }
 
 export function fallbackAnswer(state: Pick<NetworkState, 'sources' | 'claims'>): string {
@@ -163,7 +178,8 @@ export async function directSynthesis(deps: DirectSynthesisDeps): Promise<Direct
   try {
     const result = await chat({ messages, timeoutMs, signal: deps.signal });
     truncated = result.doneReason !== 'stop';
-    const text = truncated ? trimToBoundary(stripThinking(result.content)) : stripThinking(result.content);
+    const clean = stripThinking(result.content);
+    const text = stripDanglingTail(truncated ? trimToBoundary(clean) : clean);
     logger.info(
       {
         jobId,

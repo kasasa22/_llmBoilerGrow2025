@@ -196,10 +196,22 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
   const showRightRail = hasContent;
 
   const currentHistoryItem = activeChatId ? history.getById(activeChatId) : null;
-  const displaySourcesCount =
-    currentHistoryItem?.sourcesCount ?? events.filter((e) => e.phase === 'research.source_found').length;
-  const displayToolCallsCount =
-    currentHistoryItem?.toolCallsCount ?? events.filter((e) => e.phase === 'tool.called').length;
+  const liveSourcesCount = events.filter((e) => e.phase === 'research.source_found').length;
+  const liveToolCallsCount = events.filter((e) => e.phase === 'tool.called').length;
+  const displaySourcesCount = events.length ? liveSourcesCount : currentHistoryItem?.sourcesCount ?? 0;
+  const displayToolCallsCount = events.length ? liveToolCallsCount : currentHistoryItem?.toolCallsCount ?? 0;
+  const archivedDetails =
+    viewingHistory && currentHistoryItem
+      ? {
+          modelName: currentHistoryItem.modelName,
+          durationMs:
+            currentHistoryItem.completedAt && currentHistoryItem.submittedAt
+              ? new Date(currentHistoryItem.completedAt).getTime() - new Date(currentHistoryItem.submittedAt).getTime()
+              : 0,
+          sources: currentHistoryItem.sourcesCount,
+          toolCalls: currentHistoryItem.toolCallsCount,
+        }
+      : null;
 
   return (
     <div className="shell">
@@ -256,8 +268,8 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
                 <div className="answer-card-head">
                   <span className="answer-card-avatar" aria-hidden>◆</span>
                   <span className="answer-card-title">AI Research Agent</span>
-                  <span className="answer-card-badge">
-                    {viewingHistory ? 'Archived' : 'Completed'}
+                  <span className={final.partial ? 'answer-card-badge is-partial' : 'answer-card-badge'}>
+                    {final.partial ? 'Partial' : viewingHistory ? 'Archived' : 'Completed'}
                   </span>
                 </div>
                 <AnswerPanel
@@ -266,8 +278,8 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
                   partial={final.partial}
                 />
                 <div className="answer-card-foot">
-                  <span>{displaySourcesCount} sources</span>
-                  <span>{displayToolCallsCount} tool calls</span>
+                  <span>{displaySourcesCount} {displaySourcesCount === 1 ? 'source' : 'sources'}</span>
+                  <span>{displayToolCallsCount} {displayToolCallsCount === 1 ? 'tool call' : 'tool calls'}</span>
                 </div>
               </section>
             ) : null}
@@ -310,6 +322,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
                 startedAt={startedAt}
                 isComplete={isComplete}
                 citationCount={final.citations.length}
+                archived={archivedDetails}
               />
             </aside>
           ) : null}

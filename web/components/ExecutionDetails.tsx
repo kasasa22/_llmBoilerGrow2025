@@ -2,15 +2,24 @@
 
 import type { SseEvent } from '@/lib/events';
 
+export interface ArchivedDetails {
+  modelName: string;
+  durationMs: number;
+  sources: number;
+  toolCalls: number;
+}
+
 interface ExecutionDetailsProps {
   events: SseEvent[];
   modelName: string;
   startedAt: number | null;
   isComplete: boolean;
   citationCount: number;
+  archived?: ArchivedDetails | null;
 }
 
 function fmtDuration(ms: number): string {
+  if (ms <= 0) return '—';
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
   if (s < 60) return `${s.toFixed(1)} seconds`;
@@ -25,24 +34,29 @@ export function ExecutionDetails({
   startedAt,
   isComplete,
   citationCount,
+  archived,
 }: ExecutionDetailsProps) {
-  if (!events.length) return null;
+  const live = events.length > 0;
+  if (!live && !archived) return null;
 
-  const sources = events.filter((e) => e.phase === 'research.source_found').length;
-  const toolCalls = events.filter((e) => e.phase === 'tool.called').length;
+  const sources = live ? events.filter((e) => e.phase === 'research.source_found').length : archived!.sources;
+  const toolCalls = live ? events.filter((e) => e.phase === 'tool.called').length : archived!.toolCalls;
+  const model = live ? modelName : archived!.modelName || modelName;
 
   const finalEvent = events.find((e) => e.phase === 'final');
   const doneEvent = events.find((e) => e.phase === 'done');
   const endTs = doneEvent?.ts || finalEvent?.ts;
 
-  const durationMs =
-    startedAt && endTs
+  const durationMs = live
+    ? startedAt && endTs
       ? new Date(endTs).getTime() - startedAt
       : startedAt
         ? Date.now() - startedAt
-        : 0;
+        : 0
+    : archived!.durationMs;
 
-  const confidence = isComplete && sources > 0 && citationCount > 0
+  const complete = live ? isComplete : true;
+  const confidence = complete && sources > 0 && citationCount > 0
     ? sources >= 2 && citationCount >= 2
       ? 'high'
       : 'medium'
@@ -57,7 +71,7 @@ export function ExecutionDetails({
             <span className="details-icon" aria-hidden>◈</span>
             Model
           </dt>
-          <dd>{modelName}</dd>
+          <dd>{model}</dd>
         </div>
         <div className="details-row">
           <dt>

@@ -6,6 +6,7 @@ import {
   buildSynthesisMessages,
   citationsFor,
   fallbackAnswer,
+  stripDanglingTail,
   stripThinking,
   trimToBoundary,
 } from '../src/synthesize.js';
@@ -103,6 +104,37 @@ describe('trimToBoundary', () => {
   });
   it('returns an empty string for whitespace', () => {
     expect(trimToBoundary('   \n')).toBe('');
+  });
+});
+
+describe('stripDanglingTail', () => {
+  it('removes a trailing heading followed only by citation markers', () => {
+    const text = '| A | B |\n|---|---|\n| x | y |\n\n**Which to choose:**\n\n[1][2]';
+    expect(stripDanglingTail(text)).toBe('| A | B |\n|---|---|\n| x | y |');
+  });
+  it('removes a bare trailing markdown heading', () => {
+    expect(stripDanglingTail('Body sentence [1].\n\n### Which to choose')).toBe('Body sentence [1].');
+  });
+  it('removes an empty trailing bullet', () => {
+    expect(stripDanglingTail('- first point [1]\n- ')).toBe('- first point [1]');
+  });
+  it('keeps a complete answer untouched', () => {
+    const text = 'Opening [1].\n\n### Details\n- point [2]';
+    expect(stripDanglingTail(text)).toBe(text);
+  });
+  it('never strips the only line', () => {
+    expect(stripDanglingTail('### Only a heading')).toBe('### Only a heading');
+  });
+});
+
+describe('buildSynthesisMessages comparison layout', () => {
+  it('asks for the recommendation before the table so a stop after the table is complete', () => {
+    const [system] = buildSynthesisMessages({ query: 'Compare A vs B', sources, chunks: [], claims: [] });
+    const rec = system.content.indexOf('Which to choose');
+    const table = system.content.indexOf('markdown table');
+    expect(rec).toBeGreaterThan(-1);
+    expect(table).toBeGreaterThan(rec);
+    expect(system.content).toContain('last thing in the answer');
   });
 });
 
