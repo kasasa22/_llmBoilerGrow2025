@@ -46,6 +46,7 @@ const Schema = z.object({
   NETWORK_MAX_CALLS: z.coerce.number().int().positive().default(12),
   NETWORK_WALL_CLOCK_MS: z.coerce.number().int().positive().default(120_000),
   SKIP_ANALYSIS: bool().default(false),
+  SKIP_SYNTHESIS_AGENT: bool().default(false),
 
   // RAG
   RAG_ENABLED: bool().default(true),

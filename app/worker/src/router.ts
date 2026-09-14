@@ -19,6 +19,7 @@ export interface RouterConfig {
   maxAnalysisIters: number;
   maxCalls: number;
   skipAnalysis: boolean;
+  skipSynthesis: boolean;
 }
 
 export interface RouterInputs {
@@ -64,6 +65,9 @@ export function decideNextPhase(inputs: RouterInputs): RouterDecision {
     const ready =
       state.sources.length >= config.minSources && state.rawEvidence.length >= config.minEvidence;
     if (!ready) return { next: 'research', advanced: false };
+    if (config.skipSynthesis) {
+      return { next: 'done', advanced: true, reason: 'finalAnswer' };
+    }
     return { next: config.skipAnalysis ? 'synthesis' : 'analysis', advanced: true };
   }
 

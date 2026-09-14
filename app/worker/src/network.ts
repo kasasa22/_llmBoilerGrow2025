@@ -37,6 +37,7 @@ const routerConfig: RouterConfig = {
   maxAnalysisIters: env.NETWORK_MAX_ANALYSIS_ITERS,
   maxCalls: env.NETWORK_MAX_CALLS,
   skipAnalysis: env.SKIP_ANALYSIS,
+  skipSynthesis: env.SKIP_SYNTHESIS_AGENT,
 };
 
 export function buildResearchNetwork(deps: NetworkDeps) {
