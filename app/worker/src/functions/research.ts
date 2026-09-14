@@ -85,16 +85,15 @@ export const researchFn = inngest.createFunction(
           { jobId, alreadyElapsed, MAX_WALL_CLOCK_MS: env.MAX_WALL_CLOCK_MS },
           'research.wallclock_exceeded_on_replay',
         );
-        if (!state.finalAnswer && state.sources.length > 0) {
-          await forcedSynthesis(jobId, state, evidence, budget);
-        }
+        const seconds = Math.round(alreadyElapsed / 1000);
+        const fallbackAnswer = `I couldn't put an answer together within the time budget (${seconds}s). This can happen on CPU deploys when the model is cold. The first query per session warms the model — please try again and it should complete.`;
         const envelope = await step.run('publish-timeout-final', async () =>
           publishEvent({
             jobId,
             phase: Phase.Final,
             data: {
-              answer: state.finalAnswer,
-              citations: state.citations,
+              answer: fallbackAnswer,
+              citations: [],
               partial: true,
               errors: [{ agent: 'network', msg: 'wall_clock_exceeded_on_replay', at: new Date().toISOString() }],
             },
@@ -102,7 +101,7 @@ export const researchFn = inngest.createFunction(
         );
         await step.run('persist-timeout-final', async () => writeFinal(jobId, envelope));
         await step.run('mark-timeout', async () =>
-          setStatus(jobId, { state: state.finalAnswer ? 'done' : 'failed', ended_at: new Date().toISOString(), terminal_reason: 'wall_clock_replay' }),
+          setStatus(jobId, { state: 'no_answer', ended_at: new Date().toISOString(), terminal_reason: 'wall_clock_replay' }),
         );
         await publishEvent({ jobId, phase: Phase.Done, data: { state: 'wall_clock_exceeded' } });
         return { jobId, timedOut: true };

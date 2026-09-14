@@ -1,14 +1,19 @@
 'use client';
 
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 
 interface QueryFormProps {
   disabled: boolean;
   onSubmit: (query: string) => void;
+  initialValue?: string;
 }
 
-export function QueryForm({ disabled, onSubmit }: QueryFormProps) {
-  const [value, setValue] = useState('');
+export function QueryForm({ disabled, onSubmit, initialValue = '' }: QueryFormProps) {
+  const [value, setValue] = useState(initialValue);
+
+  useEffect(() => {
+    setValue(initialValue);
+  }, [initialValue]);
 
   const submit = () => {
     const query = value.trim();
