@@ -35,7 +35,6 @@ export function deriveProgress(events: SseEvent[]): DerivedProgress {
   const enteredSynthesis = events.some(
     (e) => e.phase === 'agent.transition' && e.data.to === 'synthesis',
   ) || phasesSeen.has('synthesis.started') || phasesSeen.has('synthesis.answer_ready');
-  const answerReady = phasesSeen.has('synthesis.answer_ready') || phasesSeen.has('final');
   const isComplete = phasesSeen.has('done') || phasesSeen.has('final');
   const hasError =
     phasesSeen.has('error') || phasesSeen.has('network.error') || phasesSeen.has('tool.error');

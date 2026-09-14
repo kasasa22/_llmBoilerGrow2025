@@ -121,7 +121,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
         <section className="answer answer--empty">
           <div className="answer-waiting">
             <div>
-              <strong>Sorry — I couldn't put an answer together this time.</strong>
+              <strong>Sorry &mdash; I couldn&apos;t put an answer together this time.</strong>
               <p className="hint">
                 Try a shorter, more specific question, or rephrase and send it again.
               </p>
