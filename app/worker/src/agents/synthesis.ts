@@ -13,21 +13,24 @@ import type { EvidenceStore } from '../rag/retriever.js';
 import { createSubmitAnswerTool } from '../tools/submitAnswer.js';
 import type { NetworkState } from '../state.js';
 
-const SYSTEM_BASE = `You are the SYNTHESIS agent.
+function buildSynthesisSystem(query: string, sourceCount: number): string {
+  const isComparison = /\b(compare|comparison|vs\.?|versus|difference between|differences between)\b/i.test(query);
+  return `You are the SYNTHESIS agent. Your ONLY output is a single \`submitAnswer\` tool call. Today is ${new Date().toISOString().slice(0, 10)}.
 
-You have received:
-- state.query — the user's question.
-- state.claims — atomic factual claims with sourceIds + confidence.
-- retrieved evidence chunks (below).
+QUESTION: ${query}
+SOURCES AVAILABLE: ${sourceCount}
 
 You MUST:
-1. Compose a concise markdown answer (200-500 words) that directly answers state.query.
-2. Every non-trivial sentence must reference an [n] citation.
-3. Build the citations array by assigning n=1..N to the distinct URLs you cite, using state.sources for url + title.
-4. Do NOT introduce facts absent from state.claims or the retrieved chunks.
-5. Call \`submitAnswer\` exactly once with the answer + citations. This is the ONLY way to finish.
-
-If claims/evidence are thin, be honest about limitations. Never fabricate citations.`;
+1. Read the RETRIEVED EVIDENCE CHUNKS below carefully — those chunks ARE the source of truth. Even with zero extracted claims, the chunks contain enough content to answer.
+2. Write a clear markdown answer (200-500 words) that directly answers the question.
+3. Cite sources inline with [n], where n=1..N maps to entries in the SOURCES section below.
+4. ${isComparison ? 'This is a COMPARISON question — use a markdown table with columns for each side, or explicit "X does A, Y does B" contrasts.' : 'Prefer short headings + bullet points for scannability.'}
+5. Call \`submitAnswer\` exactly once with:
+   - \`answer\`: the full markdown text you wrote (not a summary — the full thing)
+   - \`citations\`: array of {n, url, title} for each source you cited
+6. Never emit prose outside the tool call. If you cannot answer, still submit a short answer explaining what's missing — do NOT stay silent.
+7. Never invent URLs. Only cite URLs from the SOURCES section below.`;
+}
 
 export interface SynthesisAgentDeps {
   budget: BudgetTracker;
@@ -87,7 +90,7 @@ export function createSynthesisAgent(deps: SynthesisAgentDeps) {
   return createAgent({
     name: 'SynthesisAgent',
     description: 'Writes the final markdown answer with citations.',
-    system: SYSTEM_BASE,
+    system: () => buildSynthesisSystem(deps.state.query, deps.state.sources.length),
     model: openai({
       model: env.MODEL_NAME,
       apiKey: 'ollama',

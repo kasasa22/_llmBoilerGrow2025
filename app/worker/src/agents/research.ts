@@ -1,29 +1,11 @@
-/**
- * ResearchAgent — first phase. Gathers primary sources via webSearch +
- * fetchUrl. Never analyses; router advances it to Analysis when sources +
- * evidence thresholds are met.
- */
 import { createAgent, openai } from '@inngest/agent-kit';
 
+import type { BudgetTracker } from '../budget.js';
 import { env } from '../config.js';
 import { createFetchUrlTool } from '../tools/fetchUrl.js';
 import { createWebSearchTool } from '../tools/webSearch.js';
-import type { BudgetTracker } from '../budget.js';
 import type { EvidenceStore } from '../rag/retriever.js';
 import type { NetworkState } from '../state.js';
-
-const SYSTEM = `You are the RESEARCH agent in a multi-agent research pipeline.
-
-Your ONLY job is to gather primary sources for the user's question. You must:
-1. Read state.query and think briefly about what sub-questions matter.
-2. Call \`webSearch\` for each distinct sub-question. Prefer 2-3 focused queries.
-3. Call \`fetchUrl\` on the 3-5 most promising results. Prefer official docs, primary reporting, .gov, .edu.
-4. Skip URLs already present in state.sources (the tool short-circuits).
-5. Do NOT synthesize, analyse, or answer. Do NOT call submitAnswer.
-
-Stop as soon as state.sources.length >= ${env.NETWORK_MIN_SOURCES} AND rawEvidence covers the question — the router will hand off to Analysis.
-
-If a fetch returns FETCH_BLOCKED, pick a different source; never retry the same URL.`;
 
 export interface ResearchAgentDeps {
   budget: BudgetTracker;
@@ -33,11 +15,49 @@ export interface ResearchAgentDeps {
   signal: AbortSignal;
 }
 
+function isComparisonQuery(query: string): boolean {
+  return /\b(compare|comparison|vs\.?|versus|difference between|differences between)\b/i.test(query);
+}
+
+function buildResearchSystem(deps: ResearchAgentDeps): string {
+  const snap = deps.budget.snapshot();
+  const fetched = deps.state.sources.map((s) => s.url);
+  const searchesLeft = Math.max(0, env.MAX_SEARCH_QUERIES - snap.searches);
+  const fetchesLeft = Math.max(0, env.MAX_FETCHES - snap.fetches);
+  const isComparison = isComparisonQuery(deps.state.query);
+  const target = isComparison
+    ? Math.min(2, env.MAX_FETCHES)
+    : env.NETWORK_MIN_SOURCES;
+
+  return `You are the RESEARCH agent in a pipeline: Research -> Synthesis. Today is ${new Date().toISOString().slice(0, 10)}.
+
+GOAL: collect ${target} good source(s) for the question below, then stop. You do not write the answer.
+
+QUESTION: ${deps.state.query}
+
+BUDGET (hard limits enforced by the runtime; exceeding them ends the run):
+- webSearch calls left: ${searchesLeft}
+- fetchUrl calls left: ${fetchesLeft}
+Already fetched, do not fetch again: ${fetched.length ? fetched.join(', ') : 'none'}
+
+RULES
+1. Only fetchUrl produces evidence. A search alone does not move the pipeline forward; always follow a search with a fetch.
+2. Only fetch URLs that appeared in a webSearch result in this run. Never invent or guess a URL.
+3. Rank results: official docs or project site > primary reporting, .gov, .edu > everything else. Skip forums, SEO listicles, and aggregators. One fetch per domain unless the budget allows more.
+4. For comparison questions, fetch one source per side before stopping.
+5. Emit exactly one tool call per turn and no other text. When the goal is met or the budget is exhausted, reply with the single word DONE.
+6. Never call submitAnswer and never summarise or answer the question. That is the Synthesis agent's job.
+
+TOOL ERRORS
+- FETCH_BLOCKED, FETCH_TIMEOUT, FETCH_EMPTY: pick a different URL from the same search results. Never retry the same URL.
+- webSearch returned 0 results: if a search is left, retry once with a shorter, more literal query; otherwise reply DONE.`;
+}
+
 export function createResearchAgent(deps: ResearchAgentDeps) {
   return createAgent({
     name: 'ResearchAgent',
     description: 'Finds primary sources via web search and URL fetch.',
-    system: SYSTEM,
+    system: () => buildResearchSystem(deps),
     model: openai({
       model: env.MODEL_NAME,
       apiKey: 'ollama',

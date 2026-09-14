@@ -200,6 +200,116 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .hidden { display: none !important; }
 
+.phase-tracker {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.phase-tracker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.phase-tracker-header strong { font-size: 15px; }
+
+.phase-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  position: relative;
+}
+.phase-steps::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  left: calc(12.5% + 8px);
+  right: calc(12.5% + 8px);
+  height: 2px;
+  background: var(--border);
+  z-index: 0;
+}
+.phase-step {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.phase-step-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  line-height: 1;
+}
+.phase-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.phase-step-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.phase-step-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.75;
+}
+.phase-step--active .phase-step-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0f1116;
+  box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.15);
+}
+.phase-step--active .phase-step-label { color: var(--text); }
+.phase-step--done .phase-step-dot {
+  background: var(--success);
+  border-color: var(--success);
+  color: #0f1116;
+}
+.phase-step--done .phase-step-label { color: var(--text); opacity: 0.85; }
+
+.phase-current-activity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.phase-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
 .answer--waiting .answer-waiting {
   display: flex;
   align-items: center;
@@ -241,6 +351,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .timeline-details summary::before { content: "▸ "; }
 .timeline-details[open] summary::before { content: "▾ "; }
 .timeline-details[open] .timeline { margin-top: 12px; }
+.dev-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
 
 footer {
   max-width: 1180px;

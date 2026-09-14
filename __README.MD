@@ -130,9 +130,22 @@ sequenceDiagram
 
 A 3-agent [AgentKit Network](https://agentkit.inngest.com/concepts/networks) behind a hybrid router.
 
-- **ResearchAgent** — tools `webSearch`, `fetchUrl`. Gathers 3-6 primary sources.
+- **ResearchAgent** — tools `webSearch`, `fetchUrl`. Gathers 2-4 primary sources.
 - **AnalysisAgent** — tools `extractClaim`, `rateSourceCredibility`. Emits atomic claims + credibility scores.
 - **SynthesisAgent** — tool `submitAnswer` (terminal). Writes the markdown answer with `[n]` citations.
+
+### Agent decision policy
+
+Each agent runs a dynamic system prompt rebuilt per turn from the current `NetworkState` + `BudgetTracker` snapshot. The policy the ResearchAgent actually follows:
+
+1. **Only `fetchUrl` produces evidence.** A search alone doesn't advance the pipeline; always follow a search with a fetch.
+2. **Only fetch URLs returned by `webSearch` this run.** Never invent or guess a URL.
+3. **Rank results**: official docs / project site > primary reporting, `.gov`, `.edu` > everything else. Skip forums, SEO listicles, aggregators. One fetch per domain unless the budget allows more.
+4. **Comparison queries** (`compare`, `vs`, `versus`, `difference between`): fetch one source per side before stopping.
+5. **One tool call per turn.** No prose. When the goal is met or the budget is exhausted, reply `DONE`.
+6. **The prompt shows remaining budget** (`webSearch calls left: N`, `fetchUrl calls left: M`) and **already-fetched URLs** so the model plans within actual constraints — not hallucinated ones.
+
+The SynthesisAgent follows a parallel policy: produce a markdown answer 200-500 words, cite inline with `[n]`, structure comparison answers as a markdown table, and **always** call `submitAnswer` (never emit plain text — that's the only clean exit).
 
 Router transitions (all thresholds env-tunable via `NETWORK_MIN_*` / `NETWORK_MAX_*`):
 

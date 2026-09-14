@@ -6,6 +6,7 @@ import { AnswerPanel } from '@/components/AnswerPanel';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { EventTimeline } from '@/components/EventTimeline';
 import { JobBadge } from '@/components/JobBadge';
+import { PhaseTracker } from '@/components/PhaseTracker';
 import { QueryForm } from '@/components/QueryForm';
 import { TraceBadge } from '@/components/TraceBadge';
 import { useIdempotencyKey } from '@/hooks/useIdempotencyKey';
@@ -31,6 +32,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
   const [jobId, setJobId] = useState<string | null>(null);
   const [traceId, setTraceId] = useState<string | null>(null);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [final, setFinal] = useState<FinalState>(INITIAL_FINAL);
 
@@ -56,6 +58,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
     setFinal(INITIAL_FINAL);
     setJobId(null);
     setStreamUrl(null);
+    setStartedAt(null);
 
     try {
       const idempotencyKey = getIdempotencyKey(query);
@@ -67,6 +70,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
       }
       setJobId(result.data.job_id);
       setStreamUrl(buildStreamUrl(result.data.job_id));
+      setStartedAt(Date.now());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'unknown error');
     } finally {
@@ -91,39 +95,20 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
     }
   }, [status]);
 
-  const currentPhase = events.length > 0 ? events[events.length - 1]?.phase ?? null : null;
-
   return (
     <main>
       <QueryForm disabled={busy} onSubmit={onSubmit} />
 
-      {hasStream ? (
+      {hasStream && statusLabel ? (
         <div className="controls">
-          <JobBadge jobId={jobId} />
-          <TraceBadge traceId={traceId} />
-          {statusLabel ? <span className="hint">{statusLabel}</span> : null}
-          <span className="hint">
-            {modelName} · {env}
-          </span>
+          <span className="hint">{statusLabel}</span>
         </div>
       ) : null}
 
       <ErrorBanner message={error} />
 
       {isWaiting ? (
-        <section className="answer answer--waiting">
-          <div className="answer-waiting">
-            <span className="spinner" aria-hidden />
-            <div>
-              <strong>Working on your question…</strong>
-              <p className="hint">
-                {currentPhase
-                  ? `Phase: ${currentPhase}`
-                  : 'Waiting for the agent to start streaming.'}
-              </p>
-            </div>
-          </div>
-        </section>
+        <PhaseTracker events={events} startedAt={startedAt} env={env} />
       ) : null}
 
       <AnswerPanel
@@ -136,12 +121,9 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
         <section className="answer answer--empty">
           <div className="answer-waiting">
             <div>
-              <strong>The agent finished without producing an answer.</strong>
+              <strong>Sorry — I couldn't put an answer together this time.</strong>
               <p className="hint">
-                The chat model exhausted its tool-call budget without calling <code>submitAnswer</code>.
-                {events.length > 0
-                  ? ` Look at the ${events.length} events below to see what happened.`
-                  : ''}
+                Try a shorter, more specific question, or rephrase and send it again.
               </p>
             </div>
           </div>
@@ -151,9 +133,14 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
       {hasStream ? (
         <details className="timeline-details">
           <summary>
-            Show event timeline
-            {events.length > 0 ? <span className="hint"> · {events.length}</span> : null}
+            Developer details
+            {events.length > 0 ? <span className="hint"> · {events.length} events</span> : null}
           </summary>
+          <div className="dev-meta">
+            <JobBadge jobId={jobId} />
+            <TraceBadge traceId={traceId} />
+            <span className="hint">{modelName} · {env}</span>
+          </div>
           <EventTimeline events={events} />
         </details>
       ) : null}

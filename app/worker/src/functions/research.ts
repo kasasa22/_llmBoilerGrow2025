@@ -196,19 +196,34 @@ async function forcedSynthesis(
     data: { forced: true, claimCount: state.claims.length, sourceCount: state.sources.length },
   });
 
-  const claimBullets = state.claims.slice(0, 8).map((c, i) => `- ${c.text} [${i + 1}]`).join('\n');
-  const sourceBullets = state.sources
+  const sourceLines = state.sources
     .slice(0, 6)
-    .map((s, i) => `- ${s.title || s.url} [${i + 1}]`)
+    .map((s, i) => `[${i + 1}] ${s.title || s.url}`)
     .join('\n');
 
-  let answer: string;
-  if (claimBullets.length > 0) {
-    answer = `Best-effort summary from extracted claims (budget exhausted before full synthesis):\n\n${claimBullets}`;
-  } else if (sourceBullets.length > 0) {
-    answer = `The research agent gathered ${state.sources.length} source(s) but the synthesis step did not converge on a final answer before the budget was reached. Sources reviewed:\n\n${sourceBullets}\n\nTry a shorter, more specific query — the CPU-hosted model handles single-fact questions best.`;
-  } else {
-    answer = 'The research agent did not find any usable sources within the budget.';
+  let answer: string | null = null;
+
+  if (state.sources.length > 0) {
+    answer = await tryLlmSynthesis(prompt, state.query, sourceLines).catch((err) => {
+      logger.warn({ err: String(err), jobId }, 'forced_synthesis.llm_failed');
+      return null;
+    });
+  }
+
+  if (!answer) {
+    const claimBullets = state.claims.slice(0, 8).map((c, i) => `- ${c.text} [${i + 1}]`).join('\n');
+    const sourceBullets = state.sources
+      .slice(0, 6)
+      .map((s, i) => `- ${s.title || s.url} [${i + 1}]`)
+      .join('\n');
+
+    if (claimBullets.length > 0) {
+      answer = `Best-effort summary from extracted claims (budget exhausted before full synthesis):\n\n${claimBullets}`;
+    } else if (sourceBullets.length > 0) {
+      answer = `The research agent gathered ${state.sources.length} source(s) but the synthesis step did not converge on a final answer before the budget was reached. Sources reviewed:\n\n${sourceBullets}\n\nTry a shorter, more specific query — the CPU-hosted model handles single-fact questions best.`;
+    } else {
+      answer = 'The research agent did not find any usable sources within the budget.';
+    }
   }
 
   const claimCitations = state.claims
@@ -230,4 +245,45 @@ async function forcedSynthesis(
     phase: Phase.SynthesisAnswerReady,
     data: { length: answer.length, citationCount: citations.length, forced: true, prompt_chars: prompt.length },
   });
+}
+
+async function tryLlmSynthesis(context: string, query: string, sourceLines: string): Promise<string | null> {
+  const url = `${env.OLLAMA_BASE_URL.replace(/\/+$/, '')}/v1/chat/completions`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: env.MODEL_NAME,
+        temperature: 0.2,
+        max_tokens: env.MAX_TOKENS_PER_CALL,
+        messages: [
+          {
+            role: 'system',
+            content: `You are writing a clear, cited markdown answer to the user's question, using ONLY the evidence chunks provided.
+
+Rules:
+- 200-500 words. Use markdown headings/tables where they help.
+- Cite sources inline with [n], where n corresponds to the numbered SOURCES list.
+- Comparison queries: use a markdown table or explicit contrast structure.
+- Never invent facts not present in the evidence.
+- Do NOT preface with "Based on the evidence" or apologize. Just answer.`,
+          },
+          {
+            role: 'user',
+            content: `QUESTION: ${query}\n\nSOURCES:\n${sourceLines}\n\n${context}`,
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const text = body.choices?.[0]?.message?.content?.trim();
+    return text && text.length > 40 ? text : null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
