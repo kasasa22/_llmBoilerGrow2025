@@ -5,6 +5,7 @@ import {
   buildEvidenceBlock,
   buildSynthesisMessages,
   citationsFor,
+  dropUnknownCitations,
   fallbackAnswer,
   stripDanglingTail,
   stripThinking,
@@ -104,6 +105,20 @@ describe('trimToBoundary', () => {
   });
   it('returns an empty string for whitespace', () => {
     expect(trimToBoundary('   \n')).toBe('');
+  });
+});
+
+describe('dropUnknownCitations', () => {
+  it('removes markers that point past the real source list', () => {
+    expect(dropUnknownCitations('Runs on every node [1][2].', 1)).toBe('Runs on every node [1].');
+    expect(dropUnknownCitations('Fact [3]. Other [1].', 2)).toBe('Fact. Other [1].');
+  });
+  it('keeps valid markers and zero-source text untouched', () => {
+    expect(dropUnknownCitations('A [1] and B [2].', 2)).toBe('A [1] and B [2].');
+    expect(dropUnknownCitations('No markers here.', 0)).toBe('No markers here.');
+  });
+  it('does not leave stray spaces before punctuation or at line ends', () => {
+    expect(dropUnknownCitations('Line one [2]\nLine two [2] , done [1]', 1)).toBe('Line one\nLine two, done [1]');
   });
 });
 

@@ -98,6 +98,14 @@ export function trimToBoundary(text: string): string {
   return trimmed;
 }
 
+export function dropUnknownCitations(text: string, sourceCount: number): string {
+  return text
+    .replace(/\[(\d+)\]/g, (match, n: string) => (Number(n) >= 1 && Number(n) <= sourceCount ? match : ''))
+    .replace(/[ \t]+([.,;:])/g, '$1')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
 const DANGLING_LINE = /^(#{1,6}\s.*|\*\*[^*]+\*\*:?|(\[\d+\]\s*)+|[-*]\s*)$/;
 
 export function stripDanglingTail(text: string): string {
@@ -178,7 +186,7 @@ export async function directSynthesis(deps: DirectSynthesisDeps): Promise<Direct
   try {
     const result = await chat({ messages, timeoutMs, signal: deps.signal });
     truncated = result.doneReason !== 'stop';
-    const clean = stripThinking(result.content);
+    const clean = dropUnknownCitations(stripThinking(result.content), state.sources.length);
     const text = stripDanglingTail(truncated ? trimToBoundary(clean) : clean);
     logger.info(
       {
