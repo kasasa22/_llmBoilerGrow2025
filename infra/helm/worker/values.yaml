@@ -23,7 +23,7 @@ env:
   LOG_LEVEL: "info"
   PORT: "3000"
   OLLAMA_BASE_URL: "http://ollama.ollama.svc.cluster.local:11434"
-  MODEL_NAME: "qwen2.5:7b"
+  MODEL_NAME: "qwen2.5:3b"
   OLLAMA_KEEP_ALIVE: "30m"
   OLLAMA_NUM_CTX: "4096"
   WORKER_CONCURRENCY: "1"

@@ -28,7 +28,7 @@ env:
   TF_VAR_inngest_event_key: ${{ secrets.INNGEST_EVENT_KEY }}
   TF_VAR_inngest_signing_key: ${{ secrets.INNGEST_SIGNING_KEY }}
   TF_VAR_tavily_api_key: ${{ secrets.TAVILY_API_KEY }}
-  TF_VAR_enable_gpu: ${{ vars.ENABLE_GPU || 'true' }}
+  TF_VAR_enable_gpu: ${{ vars.ENABLE_GPU || 'false' }}
   TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
 
 jobs:

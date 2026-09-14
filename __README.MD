@@ -51,7 +51,7 @@ flowchart LR
   end
 
   subgraph ollama_ns["Cluster :: ollama"]
-    ollama["Ollama (:11434)<br/>qwen2.5:7b or qwen3:8b + nomic-embed-text"]
+    ollama["Ollama (:11434)<br/>qwen2.5:3b (Civo CPU) / qwen2.5:7b (local) / qwen3:8b (GPU) + nomic-embed-text"]
   end
 
   browser -->|"POST + SSE"| web
@@ -187,7 +187,7 @@ Router transitions (all thresholds env-tunable via `NETWORK_MIN_*` / `NETWORK_MA
 - Set `SKIP_SYNTHESIS_AGENT=true` to end the network as soon as research is ready and write the answer with the direct synthesis completion instead of the SynthesisAgent (default on CPU).
 - Terminate on: `submitAnswer` called, `callCount ≥ NETWORK_MAX_CALLS`, research wall clock exhausted (`MAX_WALL_CLOCK_MS`), or `errors.length ≥ 3`. Whatever the exit reason, if at least one source was fetched the direct synthesis still runs (its own `SYNTHESIS_TIMEOUT_MS` clock) and a cited answer is produced.
 
-Model: `qwen2.5:7b` on CPU deploys (~5-8 tok/s), `qwen3:8b` on GPU deploys (~40-80 tok/s). Toggle via `ENABLE_GPU` (see [ADR-004](docs/adr/004-model-choice-qwen3-8b.md)). The worker pre-loads both models at boot and Ollama keeps them resident (`OLLAMA_KEEP_ALIVE`), so the first demo query is not the slowest.
+Model: `qwen2.5:3b` on the Civo CPU node (Terraform `cpu_model_name`), `qwen2.5:7b` on local docker-compose, `qwen3:8b` on GPU deploys. Toggle via `ENABLE_GPU` (see [ADR-004](docs/adr/004-model-choice-qwen3-8b.md)). The 3b model was chosen for the cluster because the 4 vCPU / 8GB node runs 7b at roughly half the speed and with little memory headroom; the direct synthesis completion does the writing, so the small model only has to pick sources. The worker pre-loads both models at boot and Ollama keeps them resident (`OLLAMA_KEEP_ALIVE`), so the first demo query is not the slowest.
 
 ### Network state machine
 
@@ -373,7 +373,7 @@ Required GitHub **secrets** (Settings → Secrets and variables → Actions):
 
 Required GitHub **variables** (same page, Variables tab):
 
-- `ENABLE_GPU` — `true` to provision `g4g.40.kube.small` (1×A100 40GB) with the GPU Operator; `false` for a `g4s.kube.large` CPU node running `qwen2.5:7b`. Defaults to `true` if unset.
+- `ENABLE_GPU` — `true` to provision `an.g1.l40s.kube.x1` (1×L40S 48GB, 12 vCPU, 96GB RAM) with the GPU Operator; `false` for a `g4s.kube.large` CPU node running `qwen2.5:7b`. Defaults to `false` if unset. **Keep it `false` unless Civo has raised your RAM quota to at least 96GB**; see below.
 
 ### Manual recovery inputs
 
@@ -396,16 +396,19 @@ Changing the `ENABLE_GPU` GH variable is a **hardware profile change** — Civo 
 
 Both boxes are required together: the cluster destroy leaves stale helm-release entries in TF Cloud state, and reinstall clears them so the fresh cluster gets a clean helm install.
 
-**Also check GPU inventory first before flipping to `true`** — Civo LON1 A100 availability has been intermittent:
+**Check your quota and the size catalogue before flipping to `true`.** The region flag `gpu: true` only says LON1 has GPU hardware; whether *your account* can allocate a GPU node depends on two other things:
 
 ```bash
 CIVO_TOKEN="<your-token>"
-curl -sS -H "Authorization: bearer $CIVO_TOKEN" \
-  "https://api.civo.com/v2/kubernetes/available-nodes?region=LON1" \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); [print(n['name'], 'gpu=', n.get('gpu_count',0)) for n in d if 'g4g' in n.get('name','')]"
+# 1. Which GPU Kubernetes sizes exist for this account right now
+curl -sS -H "Authorization: bearer $CIVO_TOKEN" https://api.civo.com/v2/sizes \
+  | python3 -c "import json,sys; [print(s['name'], 'gpu=', s['gpu_count'], 'ram_gb=', s['ram_mb']//1024, 'cpu=', s['cpu_cores']) for s in json.load(sys.stdin) if s['gpu_count'] and 'kube' in s['name']]"
+# 2. Your account quota
+curl -sS -H "Authorization: bearer $CIVO_TOKEN" https://api.civo.com/v2/quota \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print('ram_mb_limit', d['ram_mb_limit'], 'cpu_core_limit', d['cpu_core_limit'])"
 ```
 
-If it doesn't show `gpu_count=1`, don't flip yet — the apply will destroy your CPU cluster and then fail with `gpu_count_exceeded`, leaving you with no live cluster.
+On 2026-09-14 step 1 returned only the L40S family (`an.g1.l40s.kube.x1` = 96GB RAM, 12 cores) and step 2 returned a 63GB / 16-core quota. The A100 sizes this project originally targeted (`g4g.40.kube.small`) are no longer in the catalogue. Until Civo support raises the RAM quota to ≥ 98304 MB, **every GPU apply will fail with `gpu_count_exceeded`, and if `force_replace_cluster` was ticked it will have already destroyed the CPU cluster first**. Recovery from that state is in Troubleshooting.
 
 ### Remote state (Terraform Cloud)
 
@@ -423,7 +426,7 @@ Defaults shown are for CPU deploys (`ENABLE_GPU=false`). GPU deploys relax `NETW
 | Name | Default (CPU) | Owner | Purpose |
 |---|---|---|---|
 | `ENABLE_GPU` | `false` | infra | Provision GPU node pool + NVIDIA GPU Operator; switch chat model to `qwen3:8b` |
-| `MODEL_NAME` | `qwen2.5:7b` | app + worker | Chat model (auto: `qwen3:8b` when `ENABLE_GPU=true`) |
+| `MODEL_NAME` | `qwen2.5:3b` on Civo, `qwen2.5:7b` locally | app + worker + web | Chat model. Terraform sets it from `cpu_model_name` / `model_name`; docker-compose from `.env` (auto: `qwen3:8b` when `ENABLE_GPU=true`) |
 | `APP_ENV` | `demo` | web | Rendered in the UI badge; `prod` on GPU deploys |
 | `SKIP_ANALYSIS` | `true` | worker | Bypass the Analysis phase (single model call cost matters on CPU) |
 | `SKIP_SYNTHESIS_AGENT` | `true` | worker | End the network after research and write the answer with the direct completion (ADR-010) |
@@ -456,10 +459,10 @@ The `ENABLE_GPU` toggle is the single source of truth for hardware profile. Terr
 
 | Setting | `ENABLE_GPU=true` | `ENABLE_GPU=false` |
 |---|---|---|
-| Node pool size | `g4g.40.kube.small` (1×A100 40GB) | `g4s.kube.large` (4 vCPU, 8GB) |
+| Node pool size | `an.g1.l40s.kube.x1` (1×L40S 48GB, 12 vCPU, 96GB; needs quota raise) | `g4s.kube.large` (4 vCPU, 8GB) |
 | NVIDIA GPU Operator | Installed via Helm | Skipped (`count = 0`) |
 | Ollama chart `gpu.enabled` | `true` | `false` |
-| Chat model pulled by Ollama | `qwen3:8b` (~5GB) | `qwen2.5:7b` (~4.7GB) |
+| Chat model pulled by Ollama | `qwen3:8b` (~5GB) | `qwen2.5:3b` (~2GB) |
 
 Why the CPU fallback exists: Civo GPU inventory (LON1 only for the 63GB RAM quota) is intermittently exhausted with `gpu_count_exceeded` from the API. Setting `ENABLE_GPU=false` keeps the assignment-required Civo deployment path unchanged while removing the inventory dependency. See ADR-004 for the model rationale.
 
@@ -581,7 +584,7 @@ kubectl get pods -A | grep -v Running   # expect no output
 
 # 2. Ollama is serving the chat model
 kubectl -n ollama exec -it deploy/ollama -- ollama list
-# → qwen2.5:7b (or qwen3:8b on GPU) + nomic-embed-text
+# → qwen2.5:3b (or qwen3:8b on GPU) + nomic-embed-text
 
 # 3. Worker → Ollama connectivity from inside the cluster
 kubectl -n apps exec -it deploy/worker -- \
@@ -709,12 +712,15 @@ Postgres would drag in a whole DB dependency. Inngest Realtime is beta and coupl
 transport to orchestrator. Redis pub/sub + `LPUSH` log gives fan-out + replay in one
 dep we already need for status + idempotency. Link: [ADR-005](docs/adr/005-redis-pubsub-for-sse-fanout.md).
 
-### Why qwen2.5:7b on CPU (qwen3:8b on GPU) vs llama3.3 vs gemma3:4b
+### Why qwen2.5:3b on the Civo CPU node (qwen3:8b on GPU) vs llama3.3 vs gemma3:4b
 
 Single GPU rules out 70B. `llama3.2:3b` was tested but produces malformed tool_calls that
 fail Zod validation, causing endless Inngest retries. `gemma3:4b` drops `arguments` on
-tool_calls under load. `qwen2.5:7b` and `qwen3:8b` both have strong tool-calling; picked
-qwen2.5:7b for CPU because it's ~500MB smaller and starts faster. Link:
+tool_calls under load. The qwen2.5 family and `qwen3:8b` all have strong tool-calling.
+The Civo node runs `qwen2.5:3b`: on 4 vCPU / 8GB it is about twice as fast as 7b and
+leaves memory for the rest of the stack, and since ADR-010 the answer is written by a
+plain completion, so the agent model only has to choose sources. Local docker-compose
+defaults to `qwen2.5:7b`, which is what the sample run above was measured with. Link:
 [ADR-004](docs/adr/004-model-choice-qwen3-8b.md).
 
 ### Why in-memory RAG vs pgvector or Qdrant
@@ -749,7 +755,7 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
 - **Sat 2026-09-12** — Backend (Flask + Node/TS AgentKit worker), Helm charts, Terraform, 100-test suite (74 vitest + 26 pytest), 8 MADR ADRs, evaluation harness, docs. All local CI green.
 - **Sun 2026-09-13 morning** — Local docker-compose stack verified end-to-end via `make up` + `make smoke`. Multi-agent Network (Research → Analysis → Synthesis) observed transitioning live in the SSE stream.
 - **Sun 2026-09-13 afternoon — Civo deployment iteration:**
-  - `g4s.kube.small` boilerplate default is CPU-only despite "g4" naming (Civo API confirms `gpu_count=0`). Switched to `g4g.40.kube.small` (1×A100 40GB).
+  - `g4s.kube.small` boilerplate default is CPU-only despite "g4" naming (Civo API confirms `gpu_count=0`). Switched to `g4g.40.kube.small` (1×A100 40GB), later retired by Civo; GPU default is now `an.g1.l40s.kube.x1`.
   - Account RAM quota (63GB) rules out NYC1's L40S SKU (96GB). Stayed on LON1.
   - Civo LON1 A100 40GB inventory returned `gpu_count_exceeded`. Built `ENABLE_GPU=false` toggle so the assignment-required Civo deployment path stays intact on CPU nodes.
   - Replaced boilerplate's manual NVIDIA device-plugin DaemonSet with the NVIDIA GPU Operator Helm chart v25.10.1 per Civo's official docs.
@@ -777,7 +783,7 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
 ## Troubleshooting
 
 - **`terraform apply` looks stuck on the ollama release.**
-  First pull of `qwen2.5:7b` + `nomic-embed-text` is ~5 GB from Ollama's registry. Timeout in `infra/tf/helm-ollama.tf` is set generously.
+  First pull of `qwen2.5:3b` + `nomic-embed-text` is ~2.3 GB from Ollama's registry onto a fresh PVC, and the worker's readiness probe waits for both models, so `helm_release.worker` (15-minute timeout) can time out if the pull is slow. If it does, re-run the workflow with no boxes ticked; only the worker release is retried.
 
 - **LoadBalancer IP is `pending`.**
   Civo provisions the LB after the pod is Ready. Give it 60-90s.
@@ -786,7 +792,14 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
   Fixed by Terraform Cloud remote state — see CI/CD section. If deploying without TF Cloud, delete the orphan network via `curl -X DELETE .../v2/networks/<id>?region=LON1` before retrying.
 
 - **`gpu_count_exceeded` from Civo API.**
-  Real inventory shortage. Set the `ENABLE_GPU` GH variable to `false` and re-run; the cluster will provision on CPU nodes with `qwen2.5:7b`.
+  Either the requested SKU is no longer in `/v2/sizes` for your account, or the node's RAM/CPU exceeds your quota (the L40S x1 needs 96GB against a 63GB default). Set the `ENABLE_GPU` GH variable to `false` and re-run; the cluster will provision on CPU nodes with `qwen2.5:7b`.
+
+- **Phase 1 destroyed the cluster, then the GPU create failed. No cluster exists.**
+  Terraform state now has no cluster but still lists the seven helm releases, all pointing at the dead endpoint. Recover in one workflow run:
+  1. Set the `ENABLE_GPU` variable to `false`.
+  2. Actions → Build and Deploy → Run workflow with **`force_replace_helm` ticked and `force_replace_cluster` unticked** (there is nothing to replace; ticking it makes `-replace` fail on a missing resource).
+  3. The run creates a fresh CPU cluster, removes the stale helm entries from state, and reinstalls every release. Expect ~15 minutes plus the model pull.
+  Afterwards, list detached volumes with `curl -sH "Authorization: bearer $CIVO_TOKEN" "https://api.civo.com/v2/volumes?region=LON1"`; each rebuild orphans the Ollama, Inngest and Open WebUI PVCs, and they keep billing until deleted.
 
 - **Inngest pod `CrashLoopBackOff` with `exec: "start": executable file not found`.**
   The `inngest/inngest` image has empty ENTRYPOINT. Ensure the Helm deployment uses `command: [inngest, start, ...]`, not `args: [start, ...]`.
@@ -834,7 +847,7 @@ Captured during the Loom walkthrough — see `docs/screenshots/` in the repo.
 
 - `chat-ui.png` — Next.js UI mid-run: agent transitions, RAG chunks indexed, final answer with citations.
 - `inngest.png` — Inngest dashboard step tree: `acquire-lock`, `publish-job-started`, `run-agent-network`, `publish-final`, `mark-done` with real timings.
-- `webui.png` — Open WebUI hitting `qwen2.5:7b` (CPU) directly.
+- `webui.png` — Open WebUI hitting `qwen2.5:3b` (CPU) directly.
 
 ## Repository map
 

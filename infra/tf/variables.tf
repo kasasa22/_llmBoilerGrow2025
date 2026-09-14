@@ -27,7 +27,7 @@ variable "enable_gpu" {
 
 variable "cluster_node_size" {
   type        = string
-  default     = "g4g.40.kube.small"
+  default     = "an.g1.l40s.kube.x1"
   description = <<-EOT
     Civo Kubernetes GPU node type. Used when enable_gpu = true.
 
@@ -36,10 +36,17 @@ variable "cluster_node_size" {
     /v2/sizes API (gpu_count=0). Result: helm_release.ollama hangs forever waiting
     on `nvidia.com/gpu: 1` quota that will never be advertised.
 
-    Real GPU Kubernetes SKUs available to this account:
-      LON1: g4g.40.kube.small   (1×A100 40GB, 8 CPU, 56GB)  <-- current default; fits in 63GB account quota
-      LON1: g4g.kube.small      (1×A100 80GB, 12 CPU, 96GB) - exceeds default account RAM quota
-      NYC1: an.g1.l40s.kube.x1  (1×L40S 48GB, 12 CPU, 96GB) - exceeds default account RAM quota
+    As of 2026-09-14 the /v2/sizes catalogue for this account lists ONLY the L40S
+    family as GPU-capable Kubernetes sizes; the A100 SKUs (g4g.40.kube.small,
+    g4g.kube.small) are gone and requesting them fails with gpu_count_exceeded.
+      an.g1.l40s.kube.x1  (1×L40S 48GB, 12 CPU, 96GB RAM)  <-- default
+      an.g1.l40s.kube.x2  (2×L40S, 24 CPU, 192GB RAM)
+
+    The x1 node needs 96GB RAM and 12 cores; the default account quota is 63GB
+    RAM / 16 cores. Ask Civo support to raise ram_mb_limit to >= 98304 before
+    setting enable_gpu = true, and confirm with:
+      curl -sH "Authorization: bearer $CIVO_TOKEN" https://api.civo.com/v2/quota
+      curl -sH "Authorization: bearer $CIVO_TOKEN" https://api.civo.com/v2/sizes
   EOT
 }
 
@@ -124,12 +131,14 @@ variable "model_name" {
 
 variable "cpu_model_name" {
   description = <<-EOT
-    Chat model name when enable_gpu = false. qwen2.5:3b is a smaller variant
-    of qwen2.5 that keeps tool_call reliability (unlike llama3.2:3b which
-    produced malformed calls) while running ~3x faster on CPU: ~15-20 tok/s
-    on 4 vCPU vs ~5-8 for qwen2.5:7b. Total query time drops from ~90s to ~30s.
-    Downside: weaker on long-form synthesis, but forced-synthesis LLM fallback
-    covers that case.
+    Chat model name when enable_gpu = false. qwen2.5:3b keeps qwen2.5's reliable
+    tool-call formatting (llama3.2:3b produced malformed calls) at roughly half
+    the per-token cost of qwen2.5:7b on the 4 vCPU g4s.kube.large node, and its
+    ~2GB weights leave headroom for Redis, Inngest, the worker, Flask, Web and
+    Open WebUI in 8GB RAM. Expect 2-4 minutes per query end to end; the direct
+    synthesis completion (ADR-010) writes the cited answer, so the smaller model
+    only has to pick sources. Local docker-compose defaults to qwen2.5:7b because
+    a developer laptop usually has the RAM; override with MODEL_NAME in .env.
   EOT
   type        = string
   default     = "qwen2.5:3b"

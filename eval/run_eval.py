@@ -68,7 +68,7 @@ async def _run_one(case: dict[str, Any], base_url: str) -> CaseResult:
         data = resp.json()
         job_id = data["job_id"]
 
-    timeout_s = int(case.get("timeout_s") or int(os.environ.get("EVAL_TIMEOUT_S", "120")))
+    timeout_s = int(case.get("timeout_s") or int(os.environ.get("EVAL_TIMEOUT_S", "600")))
     loop = asyncio.get_event_loop()
     transcript = await loop.run_in_executor(
         None, _consume_sse, f"{base_url}/api/jobs/{job_id}/stream", timeout_s

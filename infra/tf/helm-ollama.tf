@@ -6,7 +6,7 @@ resource "helm_release" "ollama" {
   chart      = "ollama"
   wait       = true
 
-  timeout          = 60000 # 15 minutes in seconds
+  timeout          = 60000 # seconds; deliberately generous, first model pull on a fresh PVC can take 15+ minutes
 
   namespace        = "ollama"
   create_namespace = true

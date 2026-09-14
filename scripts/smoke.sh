@@ -7,7 +7,7 @@ set -euo pipefail
 
 FLASK_URL="${FLASK_URL:-http://localhost:8080}"
 QUERY="${QUERY:-Summarise the current Civo Kubernetes offering with at least one citation.}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-120}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-600}"
 
 echo ">> POST ${FLASK_URL}/api/chat"
 resp=$(curl -sS -D - -H 'content-type: application/json' \
