@@ -11,17 +11,16 @@ Forked from `growAssignments/_llmBoilerGrow2025` — upstream commits preserved.
 
 ## Live demo endpoints
 
-Populated from `terraform output` after `apply`.
+Populated from `terraform output` after `apply`. Sample IPs from the current live deployment (Civo LON1, CPU node pool):
 
-| Purpose | URL |
+| Purpose | Example |
 |---|---|
-| **Primary UI (Next.js 15 + React 19)** | `http://<web_url>/` |
-| Vanilla UI + API (baseline) | `http://<chat_url>/` |
-| POST endpoint | `http://<web_url>/api/chat` (proxied) or `http://<chat_url>/api/chat` (direct) |
-| Job stream (SSE) | `http://<web_url>/api/jobs/<id>/stream` or `http://<chat_url>/api/jobs/<id>/stream` |
-| Job status | `http://<chat_url>/api/jobs/<id>` |
-| Inngest dashboard | `http://<inngest_dashboard_url>:8288` |
-| Open WebUI (Ollama) | `http://<ollama_ui_service_ip>/` |
+| **Primary UI (Next.js 15 + React 19)** | <http://74.220.21.49> |
+| Vanilla UI + API (baseline) | <http://74.220.17.121> |
+| POST endpoint | `http://74.220.17.121/api/chat` (direct) or `http://74.220.21.49/api/chat` (proxied) |
+| Job stream (SSE) | `http://74.220.17.121/api/jobs/<id>/stream` |
+| Inngest dashboard | <http://74.220.22.19:8288> |
+| Open WebUI (Ollama) | <http://74.220.22.216> |
 
 ## Architecture
 
@@ -52,7 +51,7 @@ flowchart LR
   end
 
   subgraph ollama_ns["Cluster :: ollama"]
-    ollama["Ollama (:11434)<br/>qwen3:8b + nomic-embed-text"]
+    ollama["Ollama (:11434)<br/>qwen2.5:7b or qwen3:8b + nomic-embed-text"]
   end
 
   browser -->|"POST + SSE"| web
@@ -117,12 +116,14 @@ A 3-agent [AgentKit Network](https://agentkit.inngest.com/concepts/networks) beh
 - **AnalysisAgent** — tools `extractClaim`, `rateSourceCredibility`. Emits atomic claims + credibility scores.
 - **SynthesisAgent** — tool `submitAnswer` (terminal). Writes the markdown answer with `[n]` citations.
 
-Router transitions:
-- `research → analysis` when `sources ≥ 3 && rawEvidence ≥ 4`.
-- `analysis → synthesis` when `claims ≥ 3 || iteration ≥ 2`.
-- Terminate on: `submitAnswer` called, `callCount ≥ 12`, `wall_clock ≥ 120s`, or `errors.length ≥ 3`.
+Router transitions (all thresholds env-tunable via `NETWORK_MIN_*` / `NETWORK_MAX_*`):
 
-Model: `qwen3:8b` (see [ADR-004](docs/adr/004-model-choice-qwen3-8b.md)).
+- `research → analysis` when `sources ≥ NETWORK_MIN_SOURCES && rawEvidence ≥ NETWORK_MIN_EVIDENCE`.
+- `analysis → synthesis` when `claims ≥ NETWORK_MIN_CLAIMS || iteration ≥ NETWORK_MAX_ANALYSIS_ITERS`.
+- Set `SKIP_ANALYSIS=true` to bypass the analysis phase (used on CPU deploys where each model call is expensive).
+- Terminate on: `submitAnswer` called, `callCount ≥ NETWORK_MAX_CALLS`, `wall_clock ≥ NETWORK_WALL_CLOCK_MS`, or `errors.length ≥ 3`.
+
+Model: `qwen2.5:7b` on CPU deploys (~5-8 tok/s), `qwen3:8b` on GPU deploys (~40-80 tok/s). Toggle via `ENABLE_GPU` (see [ADR-004](docs/adr/004-model-choice-qwen3-8b.md)).
 
 ### Network state machine
 
@@ -167,98 +168,195 @@ stateDiagram-v2
 
 ## Quickstart — local
 
-Prereqs: Docker + Docker Compose + a GPU or accept slower CPU inference.
+Prereqs: Docker + Docker Compose. Runs entirely on CPU by default — a GPU only speeds up inference; nothing hard-requires it.
 
 ```bash
 git clone https://github.com/kasasa22/_llmBoilerGrow2025
 cd _llmBoilerGrow2025
 
-# 1. Bring stack up (ollama + redis + inngest dev + worker + flask)
+# 1. Create a .env file at the repo root (gitignored) — controls the local stack
+cat > .env <<'EOF'
+MODEL_NAME=qwen2.5:7b
+RAG_EMBED_MODEL=nomic-embed-text
+INNGEST_EVENT_KEY=dev-key
+LOG_LEVEL=info
+SKIP_ANALYSIS=true
+NETWORK_MIN_SOURCES=1
+NETWORK_MAX_CALLS=6
+MAX_TOOL_CALLS=4
+MAX_FETCHES=2
+MAX_SEARCH_QUERIES=1
+MAX_WALL_CLOCK_MS=180000
+EOF
+
+# 2. Bring the full stack up (ollama + redis + inngest dev + worker + flask + web)
 make up
 
-# 2. Pull the models (once; qwen3:8b is ~5 GB, nomic-embed-text ~274 MB)
+# 3. Pull the chat + embedding models on first run (qwen2.5:7b ~4.7 GB, nomic ~274 MB)
 make pull-models
+# Override to a bigger model on GPU: `CHAT_MODEL=qwen3:8b make pull-models`
 
-# 3. Open http://localhost:8080 and ask a research question.
-#    Watch the Inngest dashboard at http://localhost:8288
+# 4. Open the UI
+#    Next.js UI (primary):    http://localhost:3001
+#    Vanilla UI (baseline):   http://localhost:8080
+#    Inngest dashboard:       http://localhost:8288
+#    Ollama Open WebUI:       http://localhost:3000
+#    Ollama server (raw API): http://localhost:11434
 
-# 4. Smoke test end-to-end
+# 5. Smoke test end-to-end (POST → SSE tail → assert final)
 make smoke
 
-# 5. Idempotency smoke (double-POST + worker-crash takeover)
+# 6. Idempotency smoke (double-POST + worker-crash takeover)
 make smoke-idem
 
-# 6. Run the eval harness
+# 7. Run the eval harness
 make eval    # writes eval/results/<date>.md
+
+# Shut down (keeps model volumes so next `up` is instant)
+make down
 ```
+
+The `.env` file is optional — docker-compose defaults kick in if it's missing — but you'll want it to tune budgets for slower CPUs or bump limits for GPU.
 
 ## Quickstart — Civo Kubernetes
 
-Prereqs: [Civo account](https://dashboard.civo.com/signup), Civo API key, Terraform ≥ 1.9, `kubectl`.
+Prereqs: [Civo account](https://dashboard.civo.com/signup) + API key, Terraform ≥ 1.9, `kubectl`, a [Terraform Cloud](https://app.terraform.io) free account.
 
-```bash
-# 1. Fill in secrets
-cp infra/tf/terraform.tfvars.example infra/tf/terraform.tfvars
-# Edit and set:
-#   civo_token            = "<your Civo API token>"
-#   inngest_event_key     = "<32-hex; openssl rand -hex 32>"
-#   inngest_signing_key   = "signkey-prod-<32-hex>"
-#   tavily_api_key        = "<optional; falls back to DuckDuckGo>"
+### 1. Terraform Cloud workspace (one-time)
 
-# 2. Deploy
-cd infra/tf
-terraform init
-terraform apply     # ~15-20 min first time (GPU node + model pulls)
+1. Sign in at [`app.terraform.io`](https://app.terraform.io) → **New organization** (any name, e.g. `myorg-llm`).
+2. **New workspace** → **CLI-driven** → name it `llm-boilerplate`.
+3. Workspace → **Settings** → **General** → **Execution Mode** = **Local (custom)** → **Save settings**.
+   *State is stored in TF Cloud, apply runs on your machine — required so `kubectl`/`helm` can reach your cluster.*
+4. Top-right avatar → **Account settings** → **Tokens** → **Create an API token** → copy it.
+5. `terraform login` locally → paste the token when prompted.
 
-# 3. Read the outputs
-terraform output
-#   chat_url             = "<lb-ip>"
-#   inngest_dashboard_url = "http://<lb-ip>:8288"
-#   ollama_ui_service_ip  = "<lb-ip>"
+### 2. Update providers.tf
 
-# 4. Smoke against the live cluster
-FLASK_URL=http://$(terraform output -raw chat_url) ../../scripts/smoke.sh
+Edit [`infra/tf/providers.tf`](infra/tf/providers.tf) to point at your workspace:
+
+```hcl
+cloud {
+  organization = "myorg-llm"          # your org name from step 1
+  workspaces {
+    name = "llm-boilerplate"          # your workspace name
+  }
+}
 ```
 
-Then browse `http://<chat_url>/`, ask a question, and watch the run tree in the Inngest dashboard.
+### 3. Configure secrets
+
+```bash
+cp infra/tf/terraform.tfvars.example infra/tf/terraform.tfvars
+# Edit infra/tf/terraform.tfvars and set:
+#   civo_token          = "<your Civo API token>"
+#   inngest_event_key   = "<32-hex; run: openssl rand -hex 32>"
+#   inngest_signing_key = "<32-hex; NO 'signkey-prod-' prefix — that format is Cloud-only>"
+#   tavily_api_key      = "<optional; empty falls back to DuckDuckGo scraping>"
+#   enable_gpu          = false   # true when Civo GPU inventory available
+```
+
+### 4. Deploy
+
+```bash
+cd infra/tf
+terraform init      # connects to TF Cloud, downloads providers
+terraform apply     # ~10-15 min: cluster boot + helm releases + model pull
+```
+
+### 5. Read the URLs
+
+```bash
+terraform output
+#   chat_url              = "<lb-ip>"       # Flask API + baseline UI
+#   web_url               = "<lb-ip>"       # Next.js UI  ← primary demo URL
+#   inngest_dashboard_url = "http://<lb-ip>:8288"
+#   ollama_ui_service_ip  = "<lb-ip>"       # Open WebUI
+```
+
+### 6. Verify end-to-end
+
+```bash
+# Smoke against the live cluster
+FLASK_URL=http://$(terraform output -raw chat_url) ../../scripts/smoke.sh
+
+# Or in the browser: open http://<web_url>/, ask "What is Ollama?"
+# Watch the Inngest dashboard for the run tree.
+```
+
+**Note on `deploy_app`**: unlike the upstream boilerplate this defaults to `true` — the whole stack ships together. Set to `false` in `terraform.tfvars` if you only want Ollama + Open WebUI.
 
 ## CI/CD
 
-Pushes to `main` that touch `app/**` or `infra/**` trigger `.github/workflows/deploy.yml`:
+Pushes to `main` that touch `app/**`, `web/**`, or `infra/**` trigger `.github/workflows/deploy.yml`:
 
-1. Build & push **two** images to GHCR (`llm-boilerplate-app`, `llm-boilerplate-worker`), tagged with both `:${sha}` and `:latest`.
-2. `terraform apply` with `TF_VAR_app_image_tag=${sha}` so every push forces a rollout.
-3. `terraform output -json` is dumped into `$GITHUB_STEP_SUMMARY` — the reviewer sees `chat_url` on the workflow page.
+1. Build & push **three** images to GHCR (`llm-boilerplate-app`, `llm-boilerplate-worker`, `llm-boilerplate-web`), tagged with both `:${sha}` and `:latest`.
+2. `terraform apply` with `TF_VAR_*_image_tag=${sha}` so every push forces a rollout of all three services.
+3. `terraform output -json` is dumped into `$GITHUB_STEP_SUMMARY` — the reviewer sees `web_url` and `chat_url` on the workflow page.
 
-Required GitHub secrets:
+Required GitHub **secrets** (Settings → Secrets and variables → Actions):
 
 - `CIVO_TOKEN`
-- `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`
-- `TAVILY_API_KEY` (optional)
-- `EVAL_URL` (for the workflow_dispatch eval action)
+- `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY` (raw hex; no `signkey-prod-` prefix)
+- `TAVILY_API_KEY` (optional; empty falls back to DuckDuckGo)
+- `TF_API_TOKEN` (Terraform Cloud user API token — enables persistent state across CI runs)
+
+Required GitHub **variables** (same page, Variables tab):
+
+- `ENABLE_GPU` — `true` to provision `g4g.40.kube.small` (1×A100 40GB) with the GPU Operator; `false` for a `g4s.kube.large` CPU node running `qwen2.5:7b`. Defaults to `true` if unset.
+
+### Manual recovery inputs
+
+The workflow_dispatch has two opt-in checkboxes for infra recovery — leave both **unchecked** for normal runs:
+
+- **`force_replace_cluster`** — destroy + recreate the Civo cluster. Only needed when changing node size (Civo doesn't allow in-place pool resize). Adds ~6 minutes.
+- **`force_replace_helm`** — `terraform state rm` all helm releases so they reinstall fresh. Use after a cluster rebuild if TF Cloud state is out of sync with the fresh cluster.
+
+### Remote state (Terraform Cloud)
+
+`infra/tf/providers.tf` has a `cloud {}` block pointing at the `kasasa22-llm/llm-boilerplate` workspace. Execution mode is **Local** — TF Cloud stores state, the GH Actions runner runs `apply`. This prevents the `DatabaseNetworkExistsError` you'd otherwise hit on every retry (CI runners are ephemeral, so without remote state each run starts from scratch and tries to recreate resources that already exist).
 
 **GHCR image visibility**: on first push the images at `ghcr.io/kasasa22/*` default to
 private. Flip them to public at
 `https://github.com/users/kasasa22/packages/container/llm-boilerplate-app/settings`
-(and `-worker`) so the K8s node can pull without an `imagePullSecret`.
+(and `-worker`, `-web`) so the K8s node can pull without an `imagePullSecret`.
 
 ## Environment variables
 
-All env vars are documented alongside the plan file. Highlights:
+Defaults shown are for CPU deploys (`ENABLE_GPU=false`). GPU deploys relax `NETWORK_MIN_*` and `MAX_TOOL_CALLS` since inference is 8-10× faster.
 
-| Name | Default | Owner | Purpose |
+| Name | Default (CPU) | Owner | Purpose |
 |---|---|---|---|
-| `MODEL_NAME` | `qwen3:8b` | app + worker | Chat model |
+| `ENABLE_GPU` | `false` | infra | Provision GPU node pool + NVIDIA GPU Operator; switch chat model to `qwen3:8b` |
+| `MODEL_NAME` | `qwen2.5:7b` | app + worker | Chat model (auto: `qwen3:8b` when `ENABLE_GPU=true`) |
+| `APP_ENV` | `demo` | web | Rendered in the UI badge; `prod` on GPU deploys |
+| `SKIP_ANALYSIS` | `true` | worker | Bypass the Analysis phase (single model call cost matters on CPU) |
 | `RAG_ENABLED` | `true` | worker | Kill-switch → fall back to first-8k-chars |
 | `RAG_EMBED_MODEL` | `nomic-embed-text` | worker | Ollama embedding model |
-| `NETWORK_MAX_CALLS` | `12` | worker | Router callCount cap |
-| `NETWORK_WALL_CLOCK_MS` | `120000` | worker | `network.run` deadline |
-| `MAX_TOOL_CALLS` | `10` | worker | Budget guard |
-| `MAX_WALL_CLOCK_MS` | `90000` | worker | Total wall-clock per run |
+| `NETWORK_MAX_CALLS` | `6` | worker | Router callCount cap |
+| `NETWORK_WALL_CLOCK_MS` | `180000` | worker | `network.run` deadline |
+| `NETWORK_MIN_SOURCES` | `1` | worker | Research→Synthesis handoff floor |
+| `MAX_TOOL_CALLS` | `4` | worker | Budget guard |
+| `MAX_FETCHES` | `2` | worker | Per-run fetchUrl cap |
+| `MAX_SEARCH_QUERIES` | `1` | worker | Per-run webSearch cap |
+| `MAX_WALL_CLOCK_MS` | `180000` | worker | Total wall-clock per run |
 | `ALLOWED_DOMAINS` | *(empty = open web)* | worker | CSV eTLD+1 allowlist |
 | `DENIED_DOMAINS` | *(empty)* | worker | Applied AFTER allowlist |
 | `LOG_LEVEL` | `info` | app + worker | JSON log verbosity |
 | `TRACE_ID_HEADER` | `x-trace-id` | app | Response header for `POST /api/chat` |
+
+### GPU vs CPU deployment
+
+The `ENABLE_GPU` toggle is the single source of truth for hardware profile. Terraform locals in [`infra/tf/locals.tf`](infra/tf/locals.tf) derive four things from it atomically:
+
+| Setting | `ENABLE_GPU=true` | `ENABLE_GPU=false` |
+|---|---|---|
+| Node pool size | `g4g.40.kube.small` (1×A100 40GB) | `g4s.kube.large` (4 vCPU, 8GB) |
+| NVIDIA GPU Operator | Installed via Helm | Skipped (`count = 0`) |
+| Ollama chart `gpu.enabled` | `true` | `false` |
+| Chat model pulled by Ollama | `qwen3:8b` (~5GB) | `qwen2.5:7b` (~4.7GB) |
+
+Why the CPU fallback exists: Civo GPU inventory (LON1 only for the 63GB RAM quota) is intermittently exhausted with `gpu_count_exceeded` from the API. Setting `ENABLE_GPU=false` keeps the assignment-required Civo deployment path unchanged while removing the inventory dependency. See ADR-004 for the model rationale.
 
 ## Idempotency
 
@@ -393,11 +491,13 @@ Postgres would drag in a whole DB dependency. Inngest Realtime is beta and coupl
 transport to orchestrator. Redis pub/sub + `LPUSH` log gives fan-out + replay in one
 dep we already need for status + idempotency. Link: [ADR-005](docs/adr/005-redis-pubsub-for-sse-fanout.md).
 
-### Why qwen3:8b vs llama3.3 vs gemma3:4b
+### Why qwen2.5:7b on CPU (qwen3:8b on GPU) vs llama3.3 vs gemma3:4b
 
-Single GPU rules out 70 B. gemma3:4b drops `arguments` on tool_calls under load.
-qwen3:8b fits, has strong tool-calling, is already in the boilerplate's default_models.
-Link: [ADR-004](docs/adr/004-model-choice-qwen3-8b.md).
+Single GPU rules out 70B. `llama3.2:3b` was tested but produces malformed tool_calls that
+fail Zod validation, causing endless Inngest retries. `gemma3:4b` drops `arguments` on
+tool_calls under load. `qwen2.5:7b` and `qwen3:8b` both have strong tool-calling; picked
+qwen2.5:7b for CPU because it's ~500MB smaller and starts faster. Link:
+[ADR-004](docs/adr/004-model-choice-qwen3-8b.md).
 
 ### Why in-memory RAG vs pgvector or Qdrant
 
@@ -427,57 +527,67 @@ phases — that scales better as the UI grows. Concretely:
 
 ## Development timeline
 
-Dated arc of how this submission was built. Reviewers can cross-reference individual
-commits in `git log`.
+Dated arc of how this submission was built. Reviewers can cross-reference commits in `git log`.
 
-- **Sat 2026-09-12** — Backend (Flask + Node/TS AgentKit worker), Helm charts,
-  Terraform, 100-test suite (74 vitest + 26 pytest), 8 MADR ADRs, evaluation harness,
-  docs. All CI passing. See `feat(app):`, `feat(worker):`, `feat(infra):`, `test:` and
-  `docs:` commits from this day.
-- **Sun 2026-09-13 morning** — Local docker-compose stack verified end-to-end via
-  `make up` followed by `make smoke`. Multi-agent Network (Research → Analysis →
-  Synthesis) observed transitioning live in the SSE stream.
-- **Sun 2026-09-13 afternoon — Civo deployment attempts (documented in `fix(infra):`
-  commits):**
-  - Discovered the boilerplate's `g4s.kube.small` default is CPU-only despite the
-    "g4" GPU-like naming (Civo API confirms `gpu_count=0`) — updated the node type.
-  - Discovered account RAM quota (63 GB) rules out NYC1's `an.g1.l40s.kube.x1`
-    (96 GB) — switched to LON1's `g4g.40.kube.small` (56 GB, fits).
-  - Civo LON1 A100 40GB inventory currently exhausted (`gpu_count_exceeded` from
-    the API); Civo support contacted for either capacity confirmation or RAM
-    quota bump. Deployment automation is complete and validated by three Terraform
-    runs; the only remaining blocker is Civo GPU availability.
-- **Sun 2026-09-13 evening → Mon 2026-09-14** — Next.js 15 App Router UI added as an
-  additive service (typed SSE envelope, Server + Client Component split, route
-  handler proxy so no CORS on Flask). Existing vanilla UI kept as the baseline. See
-  `feat(web):` commit and [ADR-009](docs/adr/009-nextjs-frontend.md).
-- **Tue 2026-09-15** — Loom recording, screenshot capture, final polish.
+- **Sat 2026-09-12** — Backend (Flask + Node/TS AgentKit worker), Helm charts, Terraform, 100-test suite (74 vitest + 26 pytest), 8 MADR ADRs, evaluation harness, docs. All local CI green.
+- **Sun 2026-09-13 morning** — Local docker-compose stack verified end-to-end via `make up` + `make smoke`. Multi-agent Network (Research → Analysis → Synthesis) observed transitioning live in the SSE stream.
+- **Sun 2026-09-13 afternoon — Civo deployment iteration:**
+  - `g4s.kube.small` boilerplate default is CPU-only despite "g4" naming (Civo API confirms `gpu_count=0`). Switched to `g4g.40.kube.small` (1×A100 40GB).
+  - Account RAM quota (63GB) rules out NYC1's L40S SKU (96GB). Stayed on LON1.
+  - Civo LON1 A100 40GB inventory returned `gpu_count_exceeded`. Built `ENABLE_GPU=false` toggle so the assignment-required Civo deployment path stays intact on CPU nodes.
+  - Replaced boilerplate's manual NVIDIA device-plugin DaemonSet with the NVIDIA GPU Operator Helm chart v25.10.1 per Civo's official docs.
+- **Sun 2026-09-13 evening** — Next.js 15 App Router UI added as an additive service (typed SSE envelope, Server + Client Component split, route handler proxy so no CORS on Flask). Vanilla UI retained as baseline. See [ADR-009](docs/adr/009-nextjs-frontend.md).
+- **Sun 2026-09-13 evening → Mon 2026-09-14 morning — infrastructure hardening:**
+  - Added Terraform Cloud remote state (`cloud {}` block in providers.tf) — CI runners are ephemeral, without persisted state every retry hit `DatabaseNetworkExistsError`.
+  - Civo provider's `kubernetes_version` validator rejected the API-returned `talos-v1.5.0` on refresh. Added `-refresh=false` on plan/apply and pinned the version format Civo now returns.
+  - Inngest OSS binary needed `command: [inngest, start, ...]` in the Helm deployment — the image has empty ENTRYPOINT, so `args:` alone tried to exec `start` as a binary.
+  - Inngest `start` command needs raw-hex signing keys, not the `signkey-prod-` prefixed Cloud format. Documented in the tfvars example.
+  - Two-phase apply added to `deploy.yml` for node-size changes (`force_replace_cluster` workflow_dispatch input): destroy + recreate cluster targeted first, then apply everything else so `data "kubernetes_service"` reads see a valid endpoint.
+- **Mon 2026-09-14 mid-day — model + agent tuning:**
+  - Node bumped from `g4s.kube.medium` (2 vCPU / 4GB) to `g4s.kube.large` (4 vCPU / 8GB) after the small node OOMkilled the kubelet under Ollama + Redis + Inngest + Worker + Flask + Web + Ollama-UI.
+  - Chat model swapped from `llama3.2:3b` (produced malformed tool_calls) to `qwen2.5:7b` (reliable structured output). Ollama chart re-pulled models.
+  - `retries: 0` on the Inngest function to stop retry storms during CPU inference. Aggressive budget cuts (`SKIP_ANALYSIS=true`, `MAX_TOOL_CALLS=4`, `MAX_FETCHES=2`).
+  - Forced-synthesis fallback wired to fire whenever synthesis returns without `submitAnswer` (previously only fired on the specific `BudgetExceeded` exception).
+  - `publish-job-started` wrapped in `step.run` for deterministic single-fire — eliminates the visible "job.started × N" repetition from Inngest step replay.
+- **Mon 2026-09-14 evening → Tue 2026-09-15** — Loom recording, README polish, final verify + submit.
 
 ## Troubleshooting
 
-- **`terraform apply` looks stuck for 10 minutes on the ollama release.**
-  First pull of `qwen3:8b` + `nomic-embed-text` is ~5 GB from Ollama's registry.
-  `kubectl -n ollama logs -f pod/…` will show the progress. Timeout in
-  `infra/tf/helm-ollama.tf` is set generously.
+- **`terraform apply` looks stuck on the ollama release.**
+  First pull of `qwen2.5:7b` + `nomic-embed-text` is ~5 GB from Ollama's registry. Timeout in `infra/tf/helm-ollama.tf` is set generously.
 
 - **LoadBalancer IP is `pending`.**
-  Civo provisions the LB after the pod is Ready. Give it 60-90 s.
+  Civo provisions the LB after the pod is Ready. Give it 60-90s.
 
-- **SSE closes at 60 s idle.**
-  Confirm you're seeing `: keep-alive` comments in the stream. The Flask response sets
-  `X-Accel-Buffering: no` and gunicorn runs with the gevent worker.
+- **`DatabaseNetworkExistsError` on retry.**
+  Fixed by Terraform Cloud remote state — see CI/CD section. If deploying without TF Cloud, delete the orphan network via `curl -X DELETE .../v2/networks/<id>?region=LON1` before retrying.
 
-- **Empty search results / `SEARCH_ERROR`.**
-  DuckDuckGo occasionally rate-limits. Set `TAVILY_API_KEY` for a free-tier alternative.
+- **`gpu_count_exceeded` from Civo API.**
+  Real inventory shortage. Set the `ENABLE_GPU` GH variable to `false` and re-run; the cluster will provision on CPU nodes with `qwen2.5:7b`.
 
-- **Agent loops.**
-  `NETWORK_MAX_CALLS=12` and `MAX_WALL_CLOCK_MS=90000` prevent it. If you're seeing the
-  budget fire, raise them via TF vars only after you've inspected the Inngest step
-  tree.
+- **Inngest pod `CrashLoopBackOff` with `exec: "start": executable file not found`.**
+  The `inngest/inngest` image has empty ENTRYPOINT. Ensure the Helm deployment uses `command: [inngest, start, ...]`, not `args: [start, ...]`.
 
-- **`kubectl` says `ImagePullBackOff` on the app or worker.**
-  GHCR image is still private — flip it to public (see CI section) or add
-  `imagePullSecrets` in the Helm chart.
+- **Inngest crash with `signing-key must be hex string`.**
+  The `INNGEST_SIGNING_KEY` secret has a `signkey-prod-` prefix (Inngest Cloud format). Self-hosted needs raw 64-hex.
+
+- **`Size change for existing cluster is not available`.**
+  Civo doesn't support in-place pool resize. Trigger the workflow_dispatch with `force_replace_cluster=true`.
+
+- **Node `NotReady`, all pods offline.**
+  Almost always OOM under `g4s.kube.medium` (4GB) — the whole stack doesn't fit. Bump `cpu_cluster_node_size` to `g4s.kube.large` (8GB) and retrigger with `force_replace_cluster=true`.
+
+- **`webSearch` returns 0 results.**
+  DuckDuckGo scraper is broken this week. Set `TAVILY_API_KEY` GH secret to a free-tier Tavily key.
+
+- **Agent loops without producing a final answer.**
+  qwen2.5:7b on CPU sometimes stalls in synthesis without calling `submitAnswer`. The forced-synthesis fallback kicks in on budget exhaustion and builds an answer from source titles + citations so the UI always renders something.
+
+- **SSE closes at 60s idle.**
+  Confirm you're seeing `: keep-alive` comments in the stream. Flask sets `X-Accel-Buffering: no` and gunicorn runs with the gevent worker.
+
+- **`kubectl` says `ImagePullBackOff`.**
+  GHCR image is still private — flip it to public (see CI section) or add `imagePullSecrets` in the Helm chart.
 
 ## Cleanup
 
@@ -491,23 +601,21 @@ workflow.
 
 ## Screenshots
 
-*(add these while recording the Loom walkthrough)*
+Captured during the Loom walkthrough — see `docs/screenshots/` in the repo.
 
-- `docs/screenshots/chat-ui.png` — the chat UI mid-run showing agent transitions and citations.
-- `docs/screenshots/inngest.png` — Inngest dashboard step tree for a completed run.
-- `docs/screenshots/webui.png` — Open WebUI hitting `qwen3:8b` directly (proves the GPU is real).
-- `docs/screenshots/eval-report.png` — rendered `eval/results/<date>.md`.
-- `docs/screenshots/trace.png` — `scripts/trace.sh` merged Flask+worker timeline.
+- `chat-ui.png` — Next.js UI mid-run: agent transitions, RAG chunks indexed, final answer with citations.
+- `inngest.png` — Inngest dashboard step tree: `acquire-lock`, `publish-job-started`, `ResearchAgent`, `SynthesisAgent` with real timings.
+- `webui.png` — Open WebUI hitting `qwen2.5:7b` (CPU) directly.
 
 ## Repository map
 
-```
+```text
 _llmBoilerGrow2025/
 ├── app/                       # Flask (Python) + Node/TS worker
 │   ├── config.py logging_config.py trace.py redis_bus.py idempotency.py
 │   ├── inngest_client.py wsgi.py main.py
 │   ├── routes/                # chat.py stream.py health.py ui.py
-│   ├── templates/  static/    # HTML/JS/CSS
+│   ├── templates/  static/    # baseline HTML/JS/CSS
 │   ├── requirements.txt Dockerfile
 │   └── worker/                # Node/TS AgentKit worker
 │       ├── src/
@@ -518,18 +626,25 @@ _llmBoilerGrow2025/
 │       │   ├── functions/research.ts
 │       │   ├── config.ts events.ts errors.ts budget.ts trace.ts
 │       │   ├── logger.ts redis.ts idempotency.ts inngestClient.ts
-│       │   ├── state.ts network.ts index.ts
-│       │   └── (agent.ts REPLACED-BY network.ts + agents/*.ts)
-│       ├── package.json tsconfig.json Dockerfile
+│       │   └── state.ts network.ts index.ts
+│       └── package.json tsconfig.json Dockerfile
+├── web/                       # Next.js 15 App Router UI
+│   ├── app/{layout,page}.tsx  # Server Component page shell
+│   ├── app/api/chat/route.ts  # POST proxy to Flask (same-origin, no CORS)
+│   ├── app/api/jobs/[id]/stream/route.ts  # SSE passthrough
+│   ├── components/{ChatPanel,QueryForm,EventTimeline,AnswerPanel,...}.tsx
+│   ├── hooks/{useJobStream,useIdempotencyKey}.ts
+│   ├── lib/{events,phases,env,api,markdown}.ts
+│   ├── package.json tsconfig.json next.config.ts Dockerfile
 ├── infra/
-│   ├── helm/{app,worker,inngest,ollama-ui}/
-│   └── tf/*.tf
+│   ├── helm/{app,worker,web,inngest,ollama-ui}/
+│   └── tf/*.tf                # cloud {} block → Terraform Cloud remote state
 ├── docs/
 │   ├── errors.md
-│   └── adr/{001..008}-*.md
+│   └── adr/{001..009}-*.md
 ├── eval/                      # dataset + driver + scoring + report
 ├── scripts/                   # smoke.sh smoke-idempotency.sh trace.sh
-├── .github/workflows/         # deploy.yml lint-*.yml eval.yml delete.yml
+├── .github/workflows/         # deploy.yml lint-*.yml eval.yml
 ├── docker-compose.yml Makefile
 └── __README.MD  (this file)
 ```

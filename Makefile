@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 COMPOSE ?= docker compose
-CHAT_MODEL ?= qwen3:8b
+CHAT_MODEL ?= qwen2.5:7b
 EMBED_MODEL ?= nomic-embed-text
 FLASK_URL ?= http://localhost:8080
 EVAL_URL ?= $(FLASK_URL)
