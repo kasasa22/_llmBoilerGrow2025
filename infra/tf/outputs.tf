@@ -14,10 +14,10 @@ output "web_url" {
 }
 
 output "inngest_dashboard_url" {
-  description = "Self-hosted Inngest dashboard URL (mid-demo split screen)."
+  description = "Self-hosted Inngest dashboard URL. Served on port 80 (works on networks that block non-standard ports) and on 8288."
   value = var.deploy_app ? (
     try(
-      format("http://%s:8288", data.kubernetes_service.inngest[0].status.0.load_balancer.0.ingress.0.ip),
+      format("http://%s", data.kubernetes_service.inngest[0].status.0.load_balancer.0.ingress.0.ip),
       null,
     )
   ) : null

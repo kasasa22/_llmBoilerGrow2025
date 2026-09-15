@@ -26,7 +26,7 @@ Populated from `terraform output` after `apply`. IPs from the live deployment as
 | Flask API root | <http://74.220.16.132> |
 | POST endpoint | `http://74.220.16.132/api/chat` (direct) or `http://74.220.20.76/api/chat` (proxied via Next.js route handler) |
 | Job stream (SSE) | `http://74.220.16.132/api/jobs/<id>/stream` |
-| Inngest dashboard | <http://74.220.23.86:8288> |
+| Inngest dashboard | <http://74.220.20.104> (also on `:8288`) |
 | Open WebUI (Ollama) | <http://74.220.23.41> |
 
 ## Run it in five steps
@@ -351,7 +351,7 @@ openssl rand -hex 32     # INNGEST_EVENT_KEY
 openssl rand -hex 32     # INNGEST_SIGNING_KEY
 ```
 
-Put them in `infra/tf/terraform.tfvars` for a local `terraform apply`, or in the GitHub secrets `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` for CI. Terraform passes them into the Helm values as `set_sensitive`, and the charts render them as Kubernetes Secrets mounted as env. Do not use a key copied from Inngest Cloud: the `signkey-prod-…` format is Cloud-only and the self-hosted binary rejects it with `signing-key must be hex string`. The dashboard (`inngest_dashboard_url` output, port 8288) has no login in the OSS build; see [ADR-002](docs/adr/002-self-hosted-inngest-vs-cloud.md).
+Put them in `infra/tf/terraform.tfvars` for a local `terraform apply`, or in the GitHub secrets `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` for CI. Terraform passes them into the Helm values as `set_sensitive`, and the charts render them as Kubernetes Secrets mounted as env. Do not use a key copied from Inngest Cloud: the `signkey-prod-…` format is Cloud-only and the self-hosted binary rejects it with `signing-key must be hex string`. The dashboard (`inngest_dashboard_url` output; served on port 80 and 8288 because some networks block non-standard ports) has no login in the OSS build; see [ADR-002](docs/adr/002-self-hosted-inngest-vs-cloud.md).
 
 No Inngest Cloud account is needed at any point.
 
@@ -407,7 +407,7 @@ terraform apply     # ~10-15 min: cluster boot + helm releases + model pull
 terraform output
 #   chat_url              = "<lb-ip>"       # Flask API (JSON only)
 #   web_url               = "<lb-ip>"       # Next.js UI  ← primary demo URL
-#   inngest_dashboard_url = "http://<lb-ip>:8288"
+#   inngest_dashboard_url = "http://<lb-ip>"       # Inngest UI, also on :8288
 #   ollama_ui_service_ip  = "<lb-ip>"       # Open WebUI
 ```
 
@@ -920,6 +920,9 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
 
 - **`terraform apply` looks stuck on the ollama release.**
   First pull of `qwen2.5:3b` + `nomic-embed-text` is ~2.3 GB from Ollama's registry onto a fresh PVC, and the worker's readiness probe waits for both models, so `helm_release.worker` (15-minute timeout) can time out if the pull is slow. If it does, re-run the workflow with no boxes ticked; only the worker release is retried.
+
+- **Inngest dashboard times out but the other three addresses work.**
+  Either the address is stale (the LB is recreated, with a new IP, whenever the Inngest release is reinstalled; `terraform output inngest_dashboard_url` shows the current one) or your network blocks port 8288. The service is also exposed on port 80, so try `http://<ip>/` without the port. From a shell, `curl -m 5 http://<ip>/` tells you which case you are in.
 
 - **LoadBalancer IP is `pending`.**
   Civo provisions the LB after the pod is Ready. Give it 60-90s.

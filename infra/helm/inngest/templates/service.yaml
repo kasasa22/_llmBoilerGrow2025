@@ -14,5 +14,9 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
+    - name: web
+      port: 80
+      targetPort: http
+      protocol: TCP
   selector:
     app: {{ .Release.Name }}

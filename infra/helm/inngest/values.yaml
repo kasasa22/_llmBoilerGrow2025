@@ -7,8 +7,9 @@ replicaCount: 1
 
 service:
   # LoadBalancer so the reviewer can open the Inngest dashboard mid-demo.
-  # Trade-off: OSS build has no built-in auth (see ADR-002 negative
-  # consequences). Set to ClusterIP if productionising.
+  # Exposed on port 80 as well as 8288 because some office and mobile
+  # networks block non-standard ports. Trade-off: OSS build has no built-in
+  # auth (see ADR-002 negative consequences). Set to ClusterIP if productionising.
   type: LoadBalancer
   port: 8288
   targetPort: 8288
