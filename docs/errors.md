@@ -12,6 +12,7 @@ for the retry policy per code.
 | `SEARCH_ERROR` | Tavily/DDG 5xx or HTML parse failure | yes | 2× (500ms/2s) | soft |
 | `FETCH_ERROR` | 4xx/5xx (except 429), TLS/DNS/timeout/size-cap | conditional | 1× on 5xx/timeout | soft |
 | `FETCH_BLOCKED` | SSRF guard / robots / mime / allowlist | no | never — pick another URL | soft |
+| `FETCH_EMPTY` | page fetched but has under `FETCH_MIN_TEXT_CHARS` of readable text (JS-rendered app, login wall, blob) | no | never — the agent picks another URL; the page is not counted as a source | soft |
 | `BUDGET_EXCEEDED` | Any of the `MAX_*` limits hit | no | forced synthesis path | soft (partial final) |
 | `RATE_LIMITED` | Upstream 429 or our semaphore | yes | honor `Retry-After`; else 2s/4s/8s | on exhaust |
 | `E_RAG_EMBED_FAIL` | Embedder circuit opened (3 consecutive failures) | no | fallback to first-8k-chars | soft |

@@ -21,6 +21,7 @@ import { logger } from '../logger.js';
 import type { EvidenceStore } from '../rag/retriever.js';
 import { publishEvent } from '../redis.js';
 import { type NetworkState, newSourceId } from '../state.js';
+import { isThinContent } from './content.js';
 import { fetchWithGuardedRedirects } from './redirects.js';
 import { isUrlAllowed } from './urlPolicy.js';
 
@@ -114,6 +115,19 @@ export function createFetchUrlTool(deps: FetchUrlDeps) {
       const buf = await readCapped(res.body, env.FETCH_URL_MAX_BYTES);
       const html = new TextDecoder('utf-8', { fatal: false }).decode(buf);
       const { title, text } = extractText(html, /html/.test(contentType));
+
+      if (isThinContent(text, env.FETCH_MIN_TEXT_CHARS)) {
+        await publishEvent({
+          jobId: deps.jobId,
+          phase: Phase.ToolError,
+          data: { tool: 'fetchUrl', code: ErrorCode.FetchEmpty, message: `page has no readable text (${text.length} chars)`, url: guarded.finalUrl },
+        });
+        throw new AgentError({
+          code: ErrorCode.FetchEmpty,
+          message: `FETCH_EMPTY: the page at ${guarded.finalUrl} has no readable text (likely a JavaScript app); pick a different URL from the search results`,
+          context: { url: guarded.finalUrl, chars: text.length },
+        });
+      }
 
       const sourceId = newSourceId();
       const finalUrl = guarded.finalUrl;

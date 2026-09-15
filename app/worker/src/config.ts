@@ -91,6 +91,7 @@ const Schema = z.object({
   FETCH_URL_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   FETCH_URL_MAX_BYTES: z.coerce.number().int().positive().default(1_048_576),
   FETCH_MAX_REDIRECTS: z.coerce.number().int().min(0).max(10).default(5),
+  FETCH_MIN_TEXT_CHARS: z.coerce.number().int().nonnegative().default(300),
   SEARCH_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   SEARCH_RESULTS: z.coerce.number().int().min(1).max(8).default(5),
   SEARCH_SNIPPET_CHARS: z.coerce.number().int().positive().default(160),

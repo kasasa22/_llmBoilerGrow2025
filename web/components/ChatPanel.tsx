@@ -17,6 +17,7 @@ import { useIdempotencyKey } from '@/hooks/useIdempotencyKey';
 import { useJobStream } from '@/hooks/useJobStream';
 import { useQueryHistory } from '@/hooks/useQueryHistory';
 import { buildStreamUrl, postChat } from '@/lib/api';
+import { resolveHistorySelection } from '@/lib/history';
 import type { Citation, FinalData } from '@/lib/events';
 
 interface ChatPanelProps {
@@ -140,26 +141,34 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
       const item = history.getById(id);
       if (!item) return;
 
-      setJobId(null);
-      setStreamUrl(null);
-      setStartedAt(null);
       setError(null);
-
       setActiveChatId(id);
       setActiveQuery(item.query);
       setTraceId(item.traceId);
 
-      if (item.answer !== null) {
-        setFinal({
-          answer: item.answer,
-          citations: item.citations,
-          partial: item.partial,
-        });
-        setViewingHistory(true);
-      } else {
-        setFinal(INITIAL_FINAL);
-        setViewingHistory(false);
-        setPrefill(item.query);
+      switch (resolveHistorySelection(item)) {
+        case 'archive':
+          setJobId(null);
+          setStreamUrl(null);
+          setStartedAt(null);
+          setFinal({ answer: item.answer, citations: item.citations, partial: item.partial });
+          setViewingHistory(true);
+          break;
+        case 'reattach':
+          setFinal(INITIAL_FINAL);
+          setViewingHistory(false);
+          setJobId(item.jobId);
+          setStreamUrl(buildStreamUrl(item.jobId as string));
+          setStartedAt(Date.parse(item.submittedAt) || Date.now());
+          break;
+        case 'prefill':
+          setJobId(null);
+          setStreamUrl(null);
+          setStartedAt(null);
+          setFinal(INITIAL_FINAL);
+          setViewingHistory(false);
+          setPrefill(item.query);
+          break;
       }
     },
     [history],

@@ -923,6 +923,12 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
 - **`terraform apply` looks stuck on the ollama release.**
   First pull of `qwen2.5:3b` + `nomic-embed-text` is ~2.3 GB from Ollama's registry onto a fresh PVC, and the worker's readiness probe waits for both models, so `helm_release.worker` (15-minute timeout) can time out if the pull is slow. If it does, re-run the workflow with no boxes ticked; only the worker release is retried.
 
+- **The answer says the page "does not detail" the topic, with one citation and nothing else.**
+  The agent fetched a page with no readable text, typically a JavaScript-rendered app such as a data portal, so synthesis had no evidence. Since 2026-09-15 such a fetch raises `FETCH_EMPTY` (threshold `FETCH_MIN_TEXT_CHARS`, 300), is not counted as a source, and the agent is told to pick a different result; with `MAX_FETCHES=2` it gets one more try. Time-sensitive questions (election results, prices) are still the weakest case, because the best pages are often live dashboards rather than articles; phrasing the question around a named article topic ("2026 Ugandan general election results") helps.
+
+- **Progress disappeared after I clicked the running item in the sidebar.**
+  Fixed on 2026-09-15: selecting a history item that has a job but no answer yet now re-attaches to its stream (Flask replays the events so far, then continues live). Before that, clicking it dropped the stream and pre-filled the question for resubmission.
+
 - **Two questions crawl at once, or a question never finishes after you pressed Cancel in the Inngest dashboard.**
   Cancelling a run in Inngest frees the concurrency slot immediately but, before 2026-09-15, did not stop the worker's in-flight agent loop, so the next question started while the cancelled one was still using the model, and both crawled. The worker now polls Inngest every `RUN_STATUS_POLL_MS` (10 s) and aborts its own loop when the run shows `Cancelled`, publishing `final` and `done` so the browser closes. Still, prefer to let a run finish: with one CPU node there is only ever one slot, and a second question queues behind the first rather than running beside it.
 
