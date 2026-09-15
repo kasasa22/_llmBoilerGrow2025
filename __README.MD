@@ -132,13 +132,14 @@ sequenceDiagram
     Redis-->>Flask: job:{id}:events -> job.started
     Flask-->>Browser: text/event-stream event=job.started
 
-    Note over Worker: Agent loop -- Research -> Analysis -> Synthesis with tool calls
-    Worker->>Ollama: POST /v1/chat/completions and /v1/embeddings
+    Note over Worker: Research agent: webSearch + fetchUrl turns (Analysis + Synthesis agents optional, off on CPU)
+    Worker->>Ollama: POST /v1/chat/completions (agent turns) and /api/embeddings
     Ollama-->>Worker: completions + vectors
     Note over Worker,Redis: Each step publishes envelope {trace_id, job_id, span_id, ts, phase, data}
     Note over Redis,Browser: Flask relays every published event as SSE (keep-alive comment every 15s)
 
-    Worker->>Redis: submitAnswer -> PUBLISH phase=final, then phase=done
+    Worker->>Ollama: POST /api/chat (direct synthesis, streamed)
+    Worker->>Redis: PUBLISH phase=final, then phase=done
     Redis-->>Flask: final + done
     Flask-->>Browser: text/event-stream event=final, event=done
 ```
@@ -154,36 +155,6 @@ sequenceDiagram
 - *"Compare Redis Streams and Redis Pub/Sub."*
 - *"What is a Kubernetes DaemonSet?"*
 - *"What are the main features of Civo GPU Kubernetes clusters?"*
-
-### Sample run (CPU, `qwen2.5:7b`, laptop 4-core i7)
-
-`POST /api/chat {"query":"Compare FastAPI vs Express"}` → 313 s wall clock, 17 SSE events, each stage exactly once:
-
-```text
-job.started → tool.called(webSearch) → research.search_completed → tool.result
-→ tool.called(fetchUrl) → research.source_found → rag.chunks_indexed → tool.result
-→ tool.called(fetchUrl) → research.source_found → rag.chunks_indexed → tool.result
-→ agent.transition(research→synthesis) → synthesis.started → rag.retrieved
-→ synthesis.answer_ready → final → done
-```
-
-`final.data` (abridged; `partial: false`, `mode: "direct"`, 2 citations):
-
-```markdown
-| Dimension          | FastAPI (Python)                     | Express (Node.js)                        |
-|--------------------|--------------------------------------|------------------------------------------|
-| Performance        | Extremely fast APIs                  | Excellent for I/O-heavy apps             |
-| Learning Curve     | Easy if familiar with Python         | Easy if familiar with JavaScript         |
-| Ecosystem          | Rich Python AI/ML libraries          | Massive npm package support              |
-| Best Use Cases     | APIs, microservices, ML integrations | Real-time apps, SaaS, e-commerce         |
-
-### Which to Choose
-- **FastAPI** is ideal for projects that require high performance, especially in
-  data-intensive or AI-powered applications. ...
-- **Express** is better suited for real-time applications, SaaS, and e-commerce ...
-```
-
-Citations: `[1]` slincom.com "Backend Battle 2025: FastAPI vs Express Explained", `[2]` kunalganglani.com "FastAPI vs Express 2026". Synthesis alone: 825 prompt tokens, 250 output tokens, 158 s at 3.4 tok/s. The research turns after the first reused 516 cached prefix tokens (Ollama `cached n_tokens`).
 
 ### What it deliberately doesn't do
 
@@ -445,49 +416,26 @@ Required GitHub **variables** (same page, Variables tab):
 
 - `ENABLE_GPU` — `true` to provision `an.g1.l40s.kube.x1` (1×L40S 48GB, 12 vCPU, 96GB RAM) with the GPU Operator; `false` for a `g4s.kube.large` CPU node running `qwen2.5:3b`. Defaults to `false` if unset. **Keep it `false` unless Civo has raised your RAM quota to at least 96GB**; see below.
 
-### Manual recovery inputs
+### Recovery inputs and the GPU toggle
 
-The workflow_dispatch has two opt-in checkboxes for infra recovery — leave both **unchecked** for normal runs:
+The manual "Run workflow" dialog has two checkboxes. Leave both **unticked** for normal runs.
 
-- **`force_replace_cluster`** — destroy + recreate the Civo cluster. Only needed when changing node size or hardware profile (Civo doesn't allow in-place pool resize). Adds ~6 minutes.
-- **`force_replace_helm`** — `terraform state rm` all helm releases so they reinstall fresh. Use after a cluster rebuild if TF Cloud state is out of sync with the fresh cluster.
+- **`force_replace_cluster`** destroys and recreates the Civo cluster. Only for a node-size change; Civo cannot resize a pool in place. Adds ~6 minutes and rotates every load-balancer IP.
+- **`force_replace_helm`** removes the seven Helm releases from Terraform state so they reinstall. Use it after a cluster rebuild, or when there is no cluster and state still lists releases.
 
-### When you flip ENABLE_GPU
-
-Changing the `ENABLE_GPU` GH variable is a **hardware profile change** — Civo can't resize a pool in place, so the next `terraform apply` will fail with `Size change ("size") for existing cluster is not available at this moment` unless you tell it to destroy + recreate.
-
-**Required flow when flipping `ENABLE_GPU`:**
-
-1. Toggle `ENABLE_GPU` at `Settings → Secrets and variables → Actions → Variables → ENABLE_GPU`
-2. **Actions → Build and Deploy → Run workflow ▼**
-3. **✅ Check `Destroy and recreate the Civo cluster`**
-4. **✅ Check `Reinstall all helm releases`**
-5. Click **Run workflow**
-
-Both boxes are required together: the cluster destroy leaves stale helm-release entries in TF Cloud state, and reinstall clears them so the fresh cluster gets a clean helm install.
-
-**Check your quota and the size catalogue before flipping to `true`.** The region flag `gpu: true` only says LON1 has GPU hardware; whether *your account* can allocate a GPU node depends on two other things:
+Flipping `ENABLE_GPU` is a node-size change, so it needs both boxes ticked in one run. Before flipping to `true`, confirm your account can actually allocate a GPU node; the region flag only says the hardware exists:
 
 ```bash
 CIVO_TOKEN="<your-token>"
-# 1. Which GPU Kubernetes sizes exist for this account right now
 curl -sS -H "Authorization: bearer $CIVO_TOKEN" https://api.civo.com/v2/sizes \
-  | python3 -c "import json,sys; [print(s['name'], 'gpu=', s['gpu_count'], 'ram_gb=', s['ram_mb']//1024, 'cpu=', s['cpu_cores']) for s in json.load(sys.stdin) if s['gpu_count'] and 'kube' in s['name']]"
-# 2. Your account quota
+  | python3 -c "import json,sys; [print(s['name'], 'ram_gb=', s['ram_mb']//1024, 'cpu=', s['cpu_cores']) for s in json.load(sys.stdin) if s['gpu_count'] and 'kube' in s['name']]"
 curl -sS -H "Authorization: bearer $CIVO_TOKEN" https://api.civo.com/v2/quota \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print('ram_mb_limit', d['ram_mb_limit'], 'cpu_core_limit', d['cpu_core_limit'])"
 ```
 
-On 2026-09-14 step 1 returned only the L40S family (`an.g1.l40s.kube.x1` = 96GB RAM, 12 cores) and step 2 returned a 63GB / 16-core quota. The A100 sizes this project originally targeted (`g4g.40.kube.small`) are no longer in the catalogue. Until Civo support raises the RAM quota to ≥ 98304 MB, **every GPU apply will fail with `gpu_count_exceeded`, and if `force_replace_cluster` was ticked it will have already destroyed the CPU cluster first**. Recovery from that state is in Troubleshooting.
+On 2026-09-14 the only GPU size offered to this account was `an.g1.l40s.kube.x1` (96 GB RAM) against a 63 GB quota, and the A100 size the project originally targeted had been withdrawn. Until Civo support raises the quota, a GPU apply fails with `gpu_count_exceeded`, and with `force_replace_cluster` ticked it destroys the CPU cluster first. The Troubleshooting section covers recovery from that state.
 
-### Remote state (Terraform Cloud)
-
-`infra/tf/providers.tf` has a `cloud {}` block pointing at the `kasasa22-llm/llm-boilerplate` workspace. Execution mode is **Local** — TF Cloud stores state, the GH Actions runner runs `apply`. This prevents the `DatabaseNetworkExistsError` you'd otherwise hit on every retry (CI runners are ephemeral, so without remote state each run starts from scratch and tries to recreate resources that already exist).
-
-**GHCR image visibility**: on first push the images at `ghcr.io/kasasa22/*` default to
-private. Flip them to public at
-`https://github.com/users/kasasa22/packages/container/llm-boilerplate-app/settings`
-(and `-worker`, `-web`) so the K8s node can pull without an `imagePullSecret`.
+State lives in Terraform Cloud (`infra/tf/providers.tf`, workspace `kasasa22-llm/llm-boilerplate`, local execution mode) so CI runners can retry without recreating resources. GHCR images default to private on first push; make `llm-boilerplate-app`, `-worker` and `-web` public so the node can pull them without an image pull secret.
 
 ## Environment variables
 
@@ -538,7 +486,7 @@ The `ENABLE_GPU` toggle is the single source of truth for hardware profile. Terr
 
 Why the CPU fallback exists: Civo GPU inventory (LON1 only for the 63GB RAM quota) is intermittently exhausted with `gpu_count_exceeded` from the API. Setting `ENABLE_GPU=false` keeps the assignment-required Civo deployment path unchanged while removing the inventory dependency. See ADR-004 for the model rationale.
 
-> **Flipping this variable requires cluster replacement** — Civo doesn't allow in-place node pool resize. See the [When you flip ENABLE_GPU](#when-you-flip-enable_gpu) section under CI/CD for the required workflow_dispatch flow.
+> **Flipping this variable requires cluster replacement** — Civo doesn't allow in-place node pool resize. See [Recovery inputs and the GPU toggle](#recovery-inputs-and-the-gpu-toggle) for the required workflow_dispatch flow.
 
 ## Idempotency
 
@@ -685,23 +633,7 @@ sample SSE payload, and UI treatment.
 
 ## Traceability
 
-Every request mints a `trace_id` (32-hex) in Flask on `POST /api/chat` and threads it
-through the Inngest event payload, the worker's Redis publishes, and every log line on
-both sides. Response header `x-trace-id` returns it to the client.
-
-Tail merged logs by `trace_id`:
-
-```bash
-# local
-make trace T=<trace_id>
-
-# cluster
-MODE=k8s scripts/trace.sh <trace_id>
-```
-
-Fields mirror W3C traceparent shape (`trace_id` / `span_id` / `parent_span_id`) so an
-OpenTelemetry follow-up PR needs no renames. OTel not shipped now — reviewer's ask is
-fully satisfied by log-based trace_id.
+Flask mints a 32-hex `trace_id` on every `POST /api/chat`, returns it in the `x-trace-id` header, and threads it through the Inngest event, every Redis envelope, and every log line on both sides. `make trace T=<trace_id>` (local) or `MODE=k8s scripts/trace.sh <trace_id>` (cluster) tails the merged logs for one request.
 
 ## Evaluation
 
@@ -801,122 +733,22 @@ data: {"seq":14,"phase":"done",…,"data":{"state":"done","mode":"direct"}}
 
 Every 15 s of silence the server sends a `: keep-alive` comment line. Reconnecting with `Last-Event-ID: 8` replays only events 9 onwards; connecting after the job finished replays the log and closes.
 
-## Design notes and trade-offs (the "why")
+## Design decisions
 
-Every decision below has a one-page ADR under [`docs/adr/`](docs/adr/). This section is
-the elevator pitch; the ADRs have the alternatives-considered detail.
+Each choice has a one-page ADR under [`docs/adr/`](docs/adr/) with the alternatives considered.
 
-### Why async / event-driven instead of sync request/response
-
-Model calls take 10-60 s. A synchronous request ties up a gunicorn worker and dies on
-Civo's LB idle timeout (~60 s). Decoupling with Inngest event + SSE gives free retry,
-replay, and observability. Link: [ADR-001](docs/adr/001-two-service-flask-plus-ts-worker.md).
-
-### Why Inngest AgentKit vs a raw workflow queue vs LangGraph
-
-Raw BullMQ/Celery gives queues but nothing about agent state or tool calls. LangGraph is
-Python-first and would force us to rebuild `createNetwork`. AgentKit gives durable
-`step.run` + retries + a UI the reviewer can inspect mid-demo. Link: [ADR-003](docs/adr/003-inngest-agentkit-multi-agent-network.md).
-
-### Why a multi-agent Network vs one agent with tools
-
-Even for one agent, `createNetwork` gives typed state + a router seam. Cost is one
-extra router prompt; benefit is testable phase transitions. Link: [ADR-003](docs/adr/003-inngest-agentkit-multi-agent-network.md).
-
-### Why the network runs in one Inngest step, and why synthesis is a plain completion
-
-AgentKit makes every model call an Inngest step but runs tool handlers as ordinary
-code, and Inngest re-invokes the function after each step. Left as-is, the tools, the
-Redis publishes and the synthesis call re-ran on every replay: four full cycles per
-job on CPU, and only the fallback text as an answer. Running the loop inside one
-`step.run` in a detached async context executes it exactly once. Writing the answer
-with a single `/api/chat` completion instead of a `submitAnswer` tool call is the
-difference between a cited 300-word answer and a malformed JSON blob on a 7B model.
-Link: [ADR-010](docs/adr/010-single-step-network-and-direct-synthesis.md).
-
-### Why self-hosted Inngest vs Inngest Cloud
-
-Reviewer must open the dashboard mid-Loom without signing up. Signing/event keys stay
-in-cluster. Trade-off: OSS build has no built-in auth, so the LB is demo-only. Link:
-[ADR-002](docs/adr/002-self-hosted-inngest-vs-cloud.md).
-
-### Why Redis pub/sub vs Inngest Realtime vs Postgres LISTEN/NOTIFY
-
-Postgres would drag in a whole DB dependency. Inngest Realtime is beta and couples
-transport to orchestrator. Redis pub/sub + `LPUSH` log gives fan-out + replay in one
-dep we already need for status + idempotency. Link: [ADR-005](docs/adr/005-redis-pubsub-for-sse-fanout.md).
-
-### Why qwen2.5:3b on the Civo CPU node (qwen3:8b on GPU) vs llama3.3 vs gemma3:4b
-
-Single GPU rules out 70B. `llama3.2:3b` was tested but produces malformed tool_calls that
-fail Zod validation, causing endless Inngest retries. `gemma3:4b` drops `arguments` on
-tool_calls under load. The qwen2.5 family and `qwen3:8b` all have strong tool-calling.
-The Civo node runs `qwen2.5:3b`: on 4 vCPU / 8GB it is about twice as fast as 7b and
-leaves memory for the rest of the stack, and since ADR-010 the answer is written by a
-plain completion, so the agent model only has to choose sources. Local docker-compose
-defaults to `qwen2.5:7b`, which is what the sample run above was measured with. Link:
-[ADR-004](docs/adr/004-model-choice-qwen3-8b.md).
-
-### What fetchUrl will and will not fetch
-
-Every hop is checked, not just the URL the model asked for: scheme and domain policy first, then DNS resolution with every A/AAAA record tested against the private, loopback, link-local, carrier-NAT, multicast and IPv4-mapped ranges as CIDR blocks, then a manual-redirect fetch with a five-hop limit that repeats both checks on each `Location`. A page that 302s to a metadata IP or an in-cluster service is refused before the request is made and reported as `FETCH_BLOCKED` with the hop count. Link: [ADR-008](docs/adr/008-ssrf-hardening-in-fetchurl.md).
-
-### Why in-memory RAG vs pgvector or Qdrant
-
-Stateless per job — no cross-session memory required. pgvector adds a chart + PVC +
-secret + backup story. ADR names pgvector as the first upgrade path when cross-session
-memory arrives. Link: [ADR-006](docs/adr/006-hybrid-rag-in-memory-vs-vectordb.md).
-
-### Why gunicorn + gevent for SSE
-
-SSE holds one connection per active job for tens of seconds. Sync workers exhaust at
-~8 concurrent users on a default 4-worker config. Gevent gives 1000+ green-threaded
-connections per worker at near-zero CPU cost while blocked on Redis. Trade-off: no
-accidental blocking calls — we use `redis-py` with monkey-patched sockets and no other
-blockers in the request path.
-
-### Why Next.js 15 App Router as the sole front-end
-
-Flask serves the async API only; the entire user interface is the Next.js app at `web/`. This
-keeps concerns clean: Python owns the async job orchestration, TypeScript owns the reactive UI.
-The Next.js layer brings a typed component model — Server Component page shell, `"use client"`
-interactive subtree, a discriminated-union type over the 25 SSE phases — that scales as the UI
-grows. `web/app/api/chat/route.ts` proxies the browser's POST to Flask server-side so
-**the browser never crosses an origin and no CORS setup is needed on Flask**, and
-`web/app/api/jobs/[id]/stream/route.ts` streams the SSE body straight back. Link:
-[ADR-009](docs/adr/009-nextjs-frontend.md).
-
-## Development timeline
-
-Dated arc of how this submission was built. Reviewers can cross-reference commits in `git log`.
-
-- **Sat 2026-09-12** — Backend (Flask + Node/TS AgentKit worker), Helm charts, Terraform, 100-test suite (74 vitest + 26 pytest), 8 MADR ADRs, evaluation harness, docs. All local CI green.
-- **Sun 2026-09-13 morning** — Local docker-compose stack verified end-to-end via `make up` + `make smoke`. Multi-agent Network (Research → Analysis → Synthesis) observed transitioning live in the SSE stream.
-- **Sun 2026-09-13 afternoon — Civo deployment iteration:**
-  - `g4s.kube.small` boilerplate default is CPU-only despite "g4" naming (Civo API confirms `gpu_count=0`). Switched to `g4g.40.kube.small` (1×A100 40GB), later retired by Civo; GPU default is now `an.g1.l40s.kube.x1`.
-  - Account RAM quota (63GB) rules out NYC1's L40S SKU (96GB). Stayed on LON1.
-  - Civo LON1 A100 40GB inventory returned `gpu_count_exceeded`. Built `ENABLE_GPU=false` toggle so the assignment-required Civo deployment path stays intact on CPU nodes.
-  - Replaced boilerplate's manual NVIDIA device-plugin DaemonSet with the NVIDIA GPU Operator Helm chart v25.10.1 per Civo's official docs.
-- **Sun 2026-09-13 evening** — Next.js 15 App Router UI added as the front-end (typed SSE envelope, Server + Client Component split, route handler proxy so no CORS on Flask). See [ADR-009](docs/adr/009-nextjs-frontend.md). The original bare-bones vanilla `templates/index.html` was later removed once the Next.js UI covered the same surface, so Flask is now a JSON-only API.
-- **Sun 2026-09-13 evening → Mon 2026-09-14 morning — infrastructure hardening:**
-  - Added Terraform Cloud remote state (`cloud {}` block in providers.tf) — CI runners are ephemeral, without persisted state every retry hit `DatabaseNetworkExistsError`.
-  - Civo provider's `kubernetes_version` validator rejected the API-returned `talos-v1.5.0` on refresh. Added `-refresh=false` on plan/apply and pinned the version format Civo now returns.
-  - Inngest OSS binary needed `command: [inngest, start, ...]` in the Helm deployment — the image has empty ENTRYPOINT, so `args:` alone tried to exec `start` as a binary.
-  - Inngest `start` command needs raw-hex signing keys, not the `signkey-prod-` prefixed Cloud format. Documented in the tfvars example.
-  - Two-phase apply added to `deploy.yml` for node-size changes (`force_replace_cluster` workflow_dispatch input): destroy + recreate cluster targeted first, then apply everything else so `data "kubernetes_service"` reads see a valid endpoint.
-- **Mon 2026-09-14 mid-day — model + agent tuning:**
-  - Node bumped from `g4s.kube.medium` (2 vCPU / 4GB) to `g4s.kube.large` (4 vCPU / 8GB) after the small node OOMkilled the kubelet under Ollama + Redis + Inngest + Worker + Flask + Web + Ollama-UI.
-  - Chat model swapped from `llama3.2:3b` (produced malformed tool_calls) to `qwen2.5:7b` (reliable structured output). Ollama chart re-pulled models.
-  - `retries: 0` on the Inngest function to stop retry storms during CPU inference. Aggressive budget cuts (`SKIP_ANALYSIS=true`, `MAX_TOOL_CALLS=4`, `MAX_FETCHES=2`).
-  - Forced-synthesis fallback wired to fire whenever synthesis returns without `submitAnswer` (previously only fired on the specific `BudgetExceeded` exception).
-  - `publish-job-started` wrapped in `step.run` for deterministic single-fire — eliminates the visible "job.started × N" repetition from Inngest step replay.
-- **Mon 2026-09-14 afternoon — replay bug + direct synthesis ([ADR-010](docs/adr/010-single-step-network-and-direct-synthesis.md)):**
-  - Diagnosed why every CPU run showed the search → fetch → synthesis cycle four times and ended on the fallback text: AgentKit turns model calls into Inngest steps but runs tool handlers as plain code, so Inngest's per-step replay re-ran tools, Redis publishes and the out-of-step synthesis call on every invocation. The pre-network wall-clock guard then overwrote finished runs with the timeout message.
-  - Moved the whole network + synthesis into a single `step.run('run-agent-network')`, executed in a detached async context so AgentKit uses plain HTTP instead of nested steps.
-  - Replaced the 60 s `forcedSynthesis` with a first-class direct completion on Ollama's native `/api/chat` (`num_predict`, `num_ctx`, `keep_alive`, timeout carved from the wall clock). The SynthesisAgent now receives the retrieved evidence in its prompt when enabled.
-  - Comparison questions fetch one source per side; `webSearch` no longer lets the model pick a tiny result limit; models are pre-loaded at boot.
-  - 36 new unit tests (110 total in the worker).
-- **Mon 2026-09-14 evening → Tue 2026-09-15** — Loom recording, README polish, final verify + submit.
+| Decision | ADR |
+|---|---|
+| Flask API and a separate TypeScript worker, joined only by an Inngest event and Redis key names | [001](docs/adr/001-two-service-flask-plus-ts-worker.md) |
+| Self-hosted Inngest so the dashboard opens without an account | [002](docs/adr/002-self-hosted-inngest-vs-cloud.md) |
+| An AgentKit network with a pure, unit-tested router | [003](docs/adr/003-inngest-agentkit-multi-agent-network.md) |
+| `qwen2.5:3b` on the CPU node, `qwen3:8b` on GPU; why not llama3.2 or gemma3 | [004](docs/adr/004-model-choice-qwen3-8b.md) |
+| Redis pub/sub plus a replay list for SSE fan-out | [005](docs/adr/005-redis-pubsub-for-sse-fanout.md) |
+| Per-job in-memory retrieval instead of a vector database | [006](docs/adr/006-hybrid-rag-in-memory-vs-vectordb.md) |
+| Request-hash claim at the API and a job lock in the worker | [007](docs/adr/007-idempotency-strategy-outbox-lite.md) |
+| SSRF guard: domain policy, CIDR checks on every resolved address, manual redirects re-checked per hop | [008](docs/adr/008-ssrf-hardening-in-fetchurl.md) |
+| Next.js App Router with same-origin route-handler proxies | [009](docs/adr/009-nextjs-frontend.md) |
+| The whole agent loop in one Inngest step, and a plain completion for synthesis | [010](docs/adr/010-single-step-network-and-direct-synthesis.md) |
 
 ## Troubleshooting
 
@@ -993,58 +825,6 @@ terraform destroy
 
 Or via GitHub Actions: run the manual `Destroy Terraform Managed Infrastructure`
 workflow.
-
-## Screenshots
-
-Captured during the Loom walkthrough — see `docs/screenshots/` in the repo.
-
-- `chat-ui.png` — Next.js UI mid-run: agent transitions, RAG chunks indexed, final answer with citations.
-- `inngest.png` — Inngest dashboard step tree: `acquire-lock`, `publish-job-started`, `run-agent-network`, `publish-final`, `mark-done` with real timings.
-- `webui.png` — Open WebUI hitting `qwen2.5:3b` (CPU) directly.
-
-## Repository map
-
-```text
-_llmBoilerGrow2025/
-├── app/                       # Flask (Python) + Node/TS worker
-│   ├── config.py logging_config.py trace.py redis_bus.py idempotency.py
-│   ├── inngest_client.py wsgi.py main.py
-│   ├── routes/                # chat.py stream.py health.py ui.py
-│   ├── templates/  static/    # baseline HTML/JS/CSS
-│   ├── requirements.txt Dockerfile
-│   └── worker/                # Node/TS AgentKit worker
-│       ├── src/
-│       │   ├── agents/{research,analysis,synthesis}.ts
-│       │   ├── tools/{webSearch,fetchUrl,urlPolicy,extractClaim,
-│       │   │         rateSourceCredibility,submitAnswer}.ts
-│       │   ├── rag/{chunker,embedder,retriever,types}.ts
-│       │   ├── functions/research.ts   # one step: run-agent-network
-│       │   ├── synthesize.ts ollama.ts # direct synthesis completion
-│       │   ├── detach.ts query.ts      # ALS escape hatch, comparison detection
-│       │   ├── config.ts events.ts errors.ts budget.ts trace.ts
-│       │   ├── logger.ts redis.ts idempotency.ts inngestClient.ts
-│       │   └── state.ts network.ts router.ts index.ts
-│       └── package.json tsconfig.json Dockerfile
-├── web/                       # Next.js 15 App Router UI
-│   ├── app/{layout,page}.tsx  # Server Component page shell
-│   ├── app/api/chat/route.ts  # POST proxy to Flask (same-origin, no CORS)
-│   ├── app/api/jobs/[id]/stream/route.ts  # SSE passthrough
-│   ├── components/{ChatPanel,QueryForm,EventTimeline,AnswerPanel,...}.tsx
-│   ├── hooks/{useJobStream,useIdempotencyKey}.ts
-│   ├── lib/{events,phases,env,api,markdown}.ts
-│   ├── package.json tsconfig.json next.config.ts Dockerfile
-├── infra/
-│   ├── helm/{app,worker,web,inngest,ollama-ui}/
-│   └── tf/*.tf                # cloud {} block → Terraform Cloud remote state
-├── docs/
-│   ├── errors.md
-│   └── adr/{001..010}-*.md
-├── eval/                      # dataset + driver + scoring + report
-├── scripts/                   # smoke.sh smoke-idempotency.sh trace.sh
-├── .github/workflows/         # deploy.yml lint-*.yml eval.yml
-├── docker-compose.yml Makefile
-└── __README.MD  (this file)
-```
 
 ## License / Attribution
 
