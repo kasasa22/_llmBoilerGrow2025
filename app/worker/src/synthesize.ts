@@ -212,7 +212,7 @@ export async function directSynthesis(deps: DirectSynthesisDeps): Promise<Direct
     await publishEvent({
       jobId,
       phase: Phase.AgentTransition,
-      data: { from: state.phase, to: 'synthesis', iteration: 0, mode: 'direct' },
+      data: { from: state.phase === 'done' ? 'research' : state.phase, to: 'synthesis', iteration: 0, mode: 'direct' },
     });
     state.phase = 'synthesis';
   }

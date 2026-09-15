@@ -431,6 +431,8 @@ Pushes to `main` that touch `app/**`, `web/**`, or `infra/**` trigger `.github/w
 2. `terraform apply` with `TF_VAR_*_image_tag=${sha}` so every push forces a rollout of all three services.
 3. `terraform output -json` is dumped into `$GITHUB_STEP_SUMMARY` — the reviewer sees `web_url` and `chat_url` on the workflow page.
 
+**Which releases a push actually upgrades.** Terraform re-installs a Helm release only when one of the inputs it tracks changes. The app, worker and web releases receive the commit SHA as their image tag, so they roll on every push and pick up any template or `values.yaml` edits in their charts at the same time. The Inngest, Redis, Ollama and Open WebUI releases have no per-push input, so an edit to their chart templates is silently ignored until something Terraform sees changes. The convention here: **bump `version:` in that chart's `Chart.yaml`** with the template change (Inngest went 0.1.0 → 0.1.1 when port 80 was added). `helm ls -A` on the cluster shows the chart version each release is running.
+
 Required GitHub **secrets** (Settings → Secrets and variables → Actions):
 
 - `CIVO_TOKEN`
@@ -920,6 +922,9 @@ Dated arc of how this submission was built. Reviewers can cross-reference commit
 
 - **`terraform apply` looks stuck on the ollama release.**
   First pull of `qwen2.5:3b` + `nomic-embed-text` is ~2.3 GB from Ollama's registry onto a fresh PVC, and the worker's readiness probe waits for both models, so `helm_release.worker` (15-minute timeout) can time out if the pull is slow. If it does, re-run the workflow with no boxes ticked; only the worker release is retried.
+
+- **Two questions crawl at once, or a question never finishes after you pressed Cancel in the Inngest dashboard.**
+  Cancelling a run in Inngest frees the concurrency slot immediately but, before 2026-09-15, did not stop the worker's in-flight agent loop, so the next question started while the cancelled one was still using the model, and both crawled. The worker now polls Inngest every `RUN_STATUS_POLL_MS` (10 s) and aborts its own loop when the run shows `Cancelled`, publishing `final` and `done` so the browser closes. Still, prefer to let a run finish: with one CPU node there is only ever one slot, and a second question queues behind the first rather than running beside it.
 
 - **Inngest dashboard times out but the other three addresses work.**
   Either the address is stale (the LB is recreated, with a new IP, whenever the Inngest release is reinstalled; `terraform output inngest_dashboard_url` shows the current one) or your network blocks port 8288. The service is also exposed on port 80, so try `http://<ip>/` without the port. From a shell, `curl -m 5 http://<ip>/` tells you which case you are in.

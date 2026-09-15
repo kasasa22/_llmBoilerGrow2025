@@ -5,6 +5,7 @@ import { ErrorCode, classify } from '../errors.js';
 import { Phase, RESEARCH_QUERY_SUBMITTED } from '../events.js';
 import { acquireJobLock, refreshJobLock, releaseJobLock, workerOwnerId } from '../idempotency.js';
 import { inngest } from '../inngestClient.js';
+import { startCancellationWatch } from '../inngestRuns.js';
 import { logger } from '../logger.js';
 import { buildResearchNetwork } from '../network.js';
 import { EvidenceStore } from '../rag/retriever.js';
@@ -24,6 +25,7 @@ export interface JobOutcome {
   answer: string | null;
   citations: Citation[];
   partial: boolean;
+  cancelled: boolean;
   mode: 'agent' | 'direct' | 'fallback' | 'none';
   phase: string;
   sources: number;
@@ -40,7 +42,7 @@ export const researchFn = inngest.createFunction(
     retries: env.INNGEST_RETRIES,
   },
   { event: RESEARCH_QUERY_SUBMITTED },
-  async ({ event, step }) => {
+  async ({ event, step, runId }) => {
     const data = event.data as EventData;
     const jobId = data.job_id;
     const trace: TraceCtx = { trace_id: data.trace_id, job_id: jobId, span_id: newSpanId(), parent_span_id: null };
@@ -85,8 +87,12 @@ export const researchFn = inngest.createFunction(
 
       const outcome = await step.run(
         'run-agent-network',
-        traced(async () => runJob({ jobId, trace, query: data.query })),
+        traced(async () => runJob({ jobId, trace, query: data.query, runId })),
       );
+
+      if (outcome.cancelled) {
+        return { jobId, cancelled: true, elapsedMs: outcome.elapsedMs };
+      }
 
       if (outcome.answer) {
         const envelope = await step.run(
@@ -149,7 +155,10 @@ interface RunJobInput {
   jobId: string;
   trace: TraceCtx;
   query: string;
+  runId?: string | null;
 }
+
+let activeJobs = 0;
 
 export async function runJob(input: RunJobInput): Promise<JobOutcome> {
   const { jobId, trace, query } = input;
@@ -169,6 +178,7 @@ export async function runJob(input: RunJobInput): Promise<JobOutcome> {
   const state = initialState({ jobId, traceId: trace.trace_id, query });
 
   const researchAbort = new AbortController();
+  const cancelAbort = new AbortController();
   const researchTimer = setTimeout(() => researchAbort.abort(new Error('MAX_WALL_CLOCK_MS')), researchBudgetMs);
   const heartbeat = setInterval(() => {
     void refreshJobLock(jobId);
@@ -176,6 +186,23 @@ export async function runJob(input: RunJobInput): Promise<JobOutcome> {
 
   let mode: JobOutcome['mode'] = 'none';
   let partial = false;
+  let cancelled = false;
+
+  activeJobs += 1;
+  if (activeJobs > 1) {
+    logger.warn({ jobId, activeJobs }, 'research.job.overlap');
+  }
+
+  const stopCancellationWatch = startCancellationWatch({
+    runId: input.runId ?? null,
+    intervalMs: env.RUN_STATUS_POLL_MS,
+    onCancelled: () => {
+      cancelled = true;
+      logger.warn({ jobId, runId: input.runId }, 'research.job.cancelled_by_inngest');
+      researchAbort.abort(new Error('CANCELLED'));
+      cancelAbort.abort(new Error('CANCELLED'));
+    },
+  });
 
   try {
     const network = buildResearchNetwork({ budget, jobId, state, evidence, signal: researchAbort.signal });
@@ -183,6 +210,7 @@ export async function runJob(input: RunJobInput): Promise<JobOutcome> {
     try {
       await runDetached(() => withTrace(trace, () => network.run(query)));
     } catch (err) {
+      if (cancelled) throw err;
       const classified = classify(err);
       logger.warn({ jobId, code: classified.code, err: classified.message }, 'research.network.exited_with_error');
       state.errors.push({ agent: 'network', code: classified.code, msg: classified.message, at: new Date().toISOString() });
@@ -195,19 +223,25 @@ export async function runJob(input: RunJobInput): Promise<JobOutcome> {
       clearTimeout(researchTimer);
     }
 
+    if (cancelled) throw new Error('CANCELLED');
+
     if (state.finalAnswer) {
       mode = 'agent';
     } else if (state.sources.length > 0) {
-      const result = await directSynthesis({ jobId, state, evidence, deadlineMs: env.SYNTHESIS_TIMEOUT_MS });
+      const result = await directSynthesis({ jobId, state, evidence, deadlineMs: env.SYNTHESIS_TIMEOUT_MS, signal: cancelAbort.signal });
       mode = result.mode;
       partial = result.partial;
     }
+    if (cancelled) throw new Error('CANCELLED');
 
     logger.info(
       { jobId, mode, partial, sources: state.sources.length, claims: state.claims.length, elapsedMs: Date.now() - startedAt },
       'research.job.completed',
     );
   } catch (err) {
+    if (cancelled) {
+      await finishCancelled(jobId).catch(() => undefined);
+    } else {
     const classified = classify(err);
     logger.error({ jobId, code: classified.code, err: classified.message }, 'research.job.failed');
     state.errors.push({ agent: 'job', code: classified.code, msg: classified.message, at: new Date().toISOString() });
@@ -216,15 +250,19 @@ export async function runJob(input: RunJobInput): Promise<JobOutcome> {
       phase: Phase.Error,
       data: { code: classified.code, message: classified.message, terminal: true },
     }).catch(() => undefined);
+    }
   } finally {
     clearTimeout(researchTimer);
     clearInterval(heartbeat);
+    stopCancellationWatch();
+    activeJobs = Math.max(0, activeJobs - 1);
   }
 
   return {
-    answer: state.finalAnswer,
+    answer: cancelled ? null : state.finalAnswer,
     citations: state.citations,
     partial,
+    cancelled,
     mode,
     phase: state.phase,
     sources: state.sources.length,
@@ -232,4 +270,16 @@ export async function runJob(input: RunJobInput): Promise<JobOutcome> {
     errors: state.errors,
     elapsedMs: Date.now() - startedAt,
   };
+}
+
+async function finishCancelled(jobId: string): Promise<void> {
+  const envelope = await publishEvent({
+    jobId,
+    phase: Phase.Final,
+    data: { answer: null, citations: [], partial: true, cancelled: true },
+  });
+  await writeFinal(jobId, envelope);
+  await setStatus(jobId, { state: 'cancelled', ended_at: new Date().toISOString(), terminal_reason: 'cancelled' });
+  await releaseJobLock(jobId).catch(() => undefined);
+  await publishEvent({ jobId, phase: Phase.Done, data: { state: 'cancelled' } });
 }

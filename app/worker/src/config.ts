@@ -43,6 +43,8 @@ const Schema = z.object({
   INNGEST_EVENT_KEY: z.string().default(''),
   INNGEST_SIGNING_KEY: z.string().default(''),
   INNGEST_SERVE_PATH: z.string().default('/api/inngest'),
+  RUN_STATUS_POLL_MS: z.coerce.number().int().positive().default(10_000),
+  RUN_STATUS_TIMEOUT_MS: z.coerce.number().int().positive().default(4_000),
   INNGEST_RETRIES: z.coerce
     .number()
     .int()

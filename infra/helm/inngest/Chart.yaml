@@ -2,5 +2,5 @@ apiVersion: v2
 name: inngest
 description: Self-hosted Inngest (single-binary) for the demo cluster
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "latest"
