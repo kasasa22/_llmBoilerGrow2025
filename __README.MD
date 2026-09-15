@@ -29,6 +29,35 @@ Populated from `terraform output` after `apply`. IPs from the live deployment as
 | Inngest dashboard | <http://74.220.23.86:8288> |
 | Open WebUI (Ollama) | <http://74.220.23.41> |
 
+## Run it in five steps
+
+The shortest path from a fresh machine to a working answer. You need Docker Desktop (or Docker Engine with the Compose plugin) and about 6 GB of free disk. Nothing else is installed on your machine; everything runs in containers.
+
+```bash
+# 1. Get the code
+git clone https://github.com/kasasa22/_llmBoilerGrow2025
+cd _llmBoilerGrow2025
+
+# 2. Start the six services (first run builds three images: 3-5 minutes)
+docker compose up --build -d
+
+# 3. Download the two models into the Ollama container (one time, ~5 GB, 5-15 minutes)
+docker compose exec ollama ollama pull qwen2.5:7b
+docker compose exec ollama ollama pull nomic-embed-text
+
+# 4. Check everything is healthy (worker and web report "unhealthy" until step 3 finishes)
+docker compose ps
+
+# 5. Ask a question
+open http://localhost:3001        # or paste it into a browser
+```
+
+Type a factual question such as `What is a Kubernetes DaemonSet?` and press Send. On a laptop CPU the first answer takes 3-6 minutes because the model is loading; later answers take 2-4 minutes. You will see the agent search, read a page, and then write a cited answer. The Inngest dashboard at <http://localhost:8288> shows the same run as a step tree.
+
+To stop: `docker compose down` (keeps the downloaded models). To start again later: `docker compose up -d`.
+
+If a step fails, jump to [Troubleshooting](#troubleshooting). The rest of this README explains what you just ran and how to deploy it to Civo. If you have `make` installed, every command above has a shortcut (`make up`, `make pull-models`, `make ps`, `make down`); see the [local quickstart](#quickstart--local).
+
 ## Architecture
 
 ### System topology
@@ -229,39 +258,29 @@ stateDiagram-v2
 
 ## Quickstart — local
 
-Prereqs: Docker + Docker Compose. Runs entirely on CPU by default — a GPU only speeds up inference; nothing hard-requires it.
+Prerequisites: Docker with Compose v2 (`docker compose version`), about 8 GB of free RAM and 6 GB of disk for the models. Runs entirely on CPU; a GPU only speeds up inference. Node 22 and Python 3.12 are needed only if you want to run the unit tests outside Docker (see [Running the tests](#running-the-tests)).
 
 ```bash
 git clone https://github.com/kasasa22/_llmBoilerGrow2025
 cd _llmBoilerGrow2025
 
-# 1. Create a .env file at the repo root (gitignored) — controls the local stack
+# 1. (Optional) create a .env file at the repo root to override defaults.
+#    Without it the stack runs with the values in docker-compose.yml, which are the
+#    tested CPU settings. The full list of knobs is in "Environment variables" below.
 cat > .env <<'EOF'
 MODEL_NAME=qwen2.5:7b
-RAG_EMBED_MODEL=nomic-embed-text
-INNGEST_EVENT_KEY=dev-key
 LOG_LEVEL=info
-SKIP_ANALYSIS=true
-SKIP_SYNTHESIS_AGENT=true
-NETWORK_MIN_SOURCES=1
-NETWORK_MIN_EVIDENCE=1
-NETWORK_MAX_CALLS=6
-MAX_TOOL_CALLS=4
-MAX_FETCHES=2
-MAX_SEARCH_QUERIES=1
-MAX_WALL_CLOCK_MS=240000
-SYNTHESIS_TIMEOUT_MS=240000
-MAX_TOKENS_PER_CALL=450
-RAG_TOP_K=4
-OLLAMA_KEEP_ALIVE=1h
 EOF
 
 # 2. Bring the full stack up (ollama + redis + inngest dev + worker + flask + web)
 make up
 
-# 3. Pull the chat + embedding models on first run (qwen2.5:7b ~4.7 GB, nomic ~274 MB)
+# 3. Pull the chat + embedding models on first run (qwen2.5:7b ~4.7 GB, nomic ~274 MB).
+#    Until this finishes `make ps` shows worker and web as unhealthy: the worker's
+#    readiness check requires both models to be present. That is expected.
 make pull-models
-# Override to a bigger model on GPU: `CHAT_MODEL=qwen3:8b make pull-models`
+# Smaller/faster on a weak CPU: `CHAT_MODEL=qwen2.5:3b make pull-models` and set MODEL_NAME=qwen2.5:3b in .env
+# Bigger on a GPU:              `CHAT_MODEL=qwen3:8b make pull-models`   and set MODEL_NAME=qwen3:8b
 
 # 4. Open the UI
 #    Next.js UI:              http://localhost:3001
@@ -284,6 +303,57 @@ make down
 ```
 
 The `.env` file is optional — docker-compose defaults kick in if it's missing — but you'll want it to tune budgets for slower CPUs or bump limits for GPU.
+
+What you should see: `make up` prints six healthy containers; `make pull-models` downloads for a few minutes on first run; the first query in the UI at <http://localhost:3001> takes 3-6 minutes on a laptop CPU (the model is cold), later ones 2-4 minutes. The Inngest dashboard at <http://localhost:8288> shows one run per query with a `run-agent-network` step.
+
+### Running the tests
+
+All three suites run in CI on every push (`lint-node.yml`, `lint-web.yml`, `lint-python.yml`). To run them locally:
+
+```bash
+# Worker (TypeScript, vitest): 164 tests
+make worker-install       # npm install in app/worker, once
+make worker-typecheck
+make worker-test
+
+# Web (Next.js, vitest + Testing Library): 31 tests
+cd web && npm ci --legacy-peer-deps && npx tsc --noEmit -p tsconfig.json && npx vitest run && cd ..
+
+# Flask (pytest with an in-memory fake Redis, no services needed): 39 tests
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r app/requirements-dev.txt
+make py-test
+make lint-py              # the same flake8 selection CI uses
+
+make test                 # worker-test + py-test together
+```
+
+`scripts/smoke.sh` and `scripts/smoke-idempotency.sh` are the end-to-end checks; they need a running stack (`make up`) or a cluster URL (`FLASK_URL=http://<chat_url>`).
+
+## Configuring Inngest
+
+Inngest sits between Flask and the worker. Flask **sends** one event per query; the worker **serves** one function that Inngest invokes over HTTP. Two apps are registered with Inngest, `bosmart-flask` (sender) and `bosmart-worker` (function host); the app id is `INNGEST_APP_ID` on each side.
+
+| Variable | Flask | Worker | Purpose |
+|---|---|---|---|
+| `INNGEST_BASE_URL` | yes | yes | Where the Inngest server is. `http://inngest:8288` in Compose, `http://inngest.inngest.svc.cluster.local:8288` on the cluster. |
+| `INNGEST_EVENT_KEY` | yes | yes | Authorises **sending** events. Flask uses it on every `POST /api/chat`. |
+| `INNGEST_SIGNING_KEY` | yes | yes | Lets the worker **verify** that function invocations really come from Inngest, and lets Inngest register the worker's functions. |
+| `INNGEST_APP_ID` | `bosmart-flask` | `bosmart-worker` | Shown in the dashboard under Apps. |
+| `INNGEST_SERVE_PATH` | — | `/api/inngest` | The worker route Inngest polls and invokes. |
+
+**Locally** the Compose file runs the Inngest **dev server** (`inngest dev --sdk-url http://worker:3000/api/inngest`). The dev server does not check keys, so the `.env` placeholder `INNGEST_EVENT_KEY=dev-key` is enough and the signing key can stay empty. It discovers the worker by polling the `--sdk-url`; you will see a `PUT /api/inngest` line in `make logs S=worker` every few seconds, which is the registration handshake, not an error.
+
+**On the cluster** the Helm chart runs the **self-hosted single binary** (`inngest start`) with persistence on a 2 GB volume. Self-hosted mode requires both keys, as raw hex, and the same two values are given to three releases: the Inngest server (its Secret), the worker, and the Flask app. Generate them once:
+
+```bash
+openssl rand -hex 32     # INNGEST_EVENT_KEY
+openssl rand -hex 32     # INNGEST_SIGNING_KEY
+```
+
+Put them in `infra/tf/terraform.tfvars` for a local `terraform apply`, or in the GitHub secrets `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` for CI. Terraform passes them into the Helm values as `set_sensitive`, and the charts render them as Kubernetes Secrets mounted as env. Do not use a key copied from Inngest Cloud: the `signkey-prod-…` format is Cloud-only and the self-hosted binary rejects it with `signing-key must be hex string`. The dashboard (`inngest_dashboard_url` output, port 8288) has no login in the OSS build; see [ADR-002](docs/adr/002-self-hosted-inngest-vs-cloud.md).
+
+No Inngest Cloud account is needed at any point.
 
 ## Quickstart — Civo Kubernetes
 
@@ -367,10 +437,11 @@ Required GitHub **secrets** (Settings → Secrets and variables → Actions):
 - `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY` (raw hex; no `signkey-prod-` prefix)
 - `TAVILY_API_KEY` (optional; empty falls back to DuckDuckGo)
 - `TF_API_TOKEN` (Terraform Cloud user API token — enables persistent state across CI runs)
+- `EVAL_URL` (optional; the base URL `eval.yml` scores against when run without an input)
 
 Required GitHub **variables** (same page, Variables tab):
 
-- `ENABLE_GPU` — `true` to provision `an.g1.l40s.kube.x1` (1×L40S 48GB, 12 vCPU, 96GB RAM) with the GPU Operator; `false` for a `g4s.kube.large` CPU node running `qwen2.5:7b`. Defaults to `false` if unset. **Keep it `false` unless Civo has raised your RAM quota to at least 96GB**; see below.
+- `ENABLE_GPU` — `true` to provision `an.g1.l40s.kube.x1` (1×L40S 48GB, 12 vCPU, 96GB RAM) with the GPU Operator; `false` for a `g4s.kube.large` CPU node running `qwen2.5:3b`. Defaults to `false` if unset. **Keep it `false` unless Civo has raised your RAM quota to at least 96GB**; see below.
 
 ### Manual recovery inputs
 
@@ -649,32 +720,84 @@ artefact + posted to job summary.
 
 ## Example requests
 
+Captured from a real run (local stack, `qwen2.5:7b`). Replace `<chat_url>` with `http://localhost:8080` locally or the `chat_url` Terraform output on the cluster; the Next.js UI proxies the same paths on its own port.
+
 ```bash
-# Fresh submission
-curl -sS -X POST http://<chat_url>/api/chat \
+# 1. Submit a question. Returns immediately.
+curl -sS -i -X POST http://<chat_url>/api/chat \
      -H 'content-type: application/json' \
-     -d '{"query":"What Kubernetes GPU node options does Civo offer?"}'
-# {"job_id":"job_a3f8c1", "stream_url":"/api/jobs/job_a3f8c1/stream", "idempotent":false}
-
-# With idempotency key
-curl -sS -X POST http://<chat_url>/api/chat \
-     -H 'content-type: application/json' \
-     -H 'Idempotency-Key: bosmart-2026-09-14-01' \
-     -d '{"query":"..."}'
-
-# Tail the stream
-curl -N http://<chat_url>/api/jobs/job_a3f8c1/stream
-# id: 1
-# event: job.started
-# data: {"seq":1,"phase":"job.started","trace_id":"...","job_id":"job_a3f8c1", ...}
-# id: 2
-# event: agent.transition
-# data: {"seq":2,"phase":"agent.transition","data":{"from":"research","to":"analysis"}}
-# ...
-# event: final
-# data: {..."answer":"...","citations":[{"n":1,"url":"..."}]}
-# event: done
+     -d '{"query":"What is Server-Sent Events and when should you use it?"}'
 ```
+
+```http
+HTTP/1.1 202 ACCEPTED
+Content-Type: application/json
+x-trace-id: 81b33d4640082fb7d943f3b926e8a0aa
+Idempotency-Status: created
+
+{"idempotent":false,"job_id":"job_965e06db09d0","status_url":"/api/jobs/job_965e06db09d0","stream_url":"/api/jobs/job_965e06db09d0/stream"}
+```
+
+```bash
+# 2. Send the same question again within an hour: same job, no new work.
+#    → HTTP 200, Idempotency-Status: replayed, "idempotent": true
+
+# 3. Optional client key. Reusing a key with a different body is refused.
+curl -sS -X POST http://<chat_url>/api/chat \
+     -H 'content-type: application/json' \
+     -H 'Idempotency-Key: demo-2026-09-15-01' \
+     -d '{"query":"What is a Kubernetes DaemonSet?"}'
+#    → 202 first time; 200 on retry; 409 {"error":"idempotency_key_reuse"} if the body changes
+
+# 4. Poll status (optional; the stream is the intended path)
+curl -sS http://<chat_url>/api/jobs/job_965e06db09d0
+#    {"state":"running","owner":"worker-…","started_at":"…","model":"qwen2.5:7b", …}
+
+# 5. Tail the stream until it closes (2-5 minutes on CPU)
+curl -N http://<chat_url>/api/jobs/job_965e06db09d0/stream
+```
+
+```text
+: stream open
+id: 1
+event: job.started
+data: {"seq":1,"phase":"job.started","trace_id":"81b33d46…","job_id":"job_965e06db09d0","ts":"…","data":{"query":"What is Server-Sent Events and when should you use it?"}}
+
+id: 2
+event: tool.called
+data: {"seq":2,"phase":"tool.called",…,"data":{"tool":"webSearch","args":{"query":"Server-Sent Events","limit":5}}}
+
+id: 3
+event: research.search_completed
+id: 4
+event: tool.result
+id: 5
+event: tool.called          ← fetchUrl
+id: 6
+event: research.source_found
+data: {…,"data":{"sourceId":"…","url":"https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events","title":"Using server-sent events - Web APIs | MDN"}}
+id: 7
+event: rag.chunks_indexed   ← {"chunkCount":11,"embedded":true}
+id: 8
+event: tool.result
+id: 9
+event: agent.transition     ← {"from":"research","to":"synthesis","mode":"direct"}
+id: 10
+event: synthesis.started
+id: 11
+event: rag.retrieved        ← {"k":4,"topScore":0.71,"minScore":0.35}
+id: 12
+event: synthesis.answer_ready
+id: 13
+event: final
+data: {"seq":13,"phase":"final",…,"data":{"answer":"Server-Sent Events (SSE) are a web API for delivering updates from a server to a browser [1].\n\n- **Definition**: …","citations":[{"n":1,"url":"https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events","title":"Using server-sent events - Web APIs | MDN"}],"partial":false,"mode":"direct"}}
+
+id: 14
+event: done
+data: {"seq":14,"phase":"done",…,"data":{"state":"done","mode":"direct"}}
+```
+
+Every 15 s of silence the server sends a `: keep-alive` comment line. Reconnecting with `Last-Event-ID: 8` replays only events 9 onwards; connecting after the job finished replays the log and closes.
 
 ## Design notes and trade-offs (the "why")
 
