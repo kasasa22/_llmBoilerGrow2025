@@ -130,10 +130,35 @@ export function collapseRepeats(text: string): string {
 export function finaliseAnswer(text: string, valid: number | ReadonlySet<number>, truncated: boolean): string {
   const collapsed = collapseRepeats(text.trimEnd());
   const bounded = truncated ? trimToBoundary(collapsed) : collapsed;
-  return stripDanglingTail(dropUnknownCitations(bounded, valid));
+  return stripDanglingTail(stripSourceList(dropUnknownCitations(bounded, valid)));
 }
 
 const DANGLING_LINE = /^(#{1,6}\s.*|\*\*[^*]+\*\*:?|(\[\d+\]\s*)+|[-*]\s*)$/;
+const SOURCE_LINE = /^(?:[-*]\s*)?\[\d+\][:\s].*https?:\/\/\S+\s*$/;
+const SOURCE_HEADING = /^(?:#{1,6}\s*|\*\*)?(sources?|references?|citations?):?(?:\*\*)?:?\s*$/i;
+
+export function stripSourceList(text: string): string {
+  const lines = text.trimEnd().split('\n');
+  let removed = 0;
+  while (lines.length > 1) {
+    const last = lines[lines.length - 1].trim();
+    if (last === '' && removed > 0) {
+      lines.pop();
+      continue;
+    }
+    if (SOURCE_LINE.test(last)) {
+      lines.pop();
+      removed += 1;
+      continue;
+    }
+    if (removed > 0 && SOURCE_HEADING.test(last)) {
+      lines.pop();
+      continue;
+    }
+    break;
+  }
+  return lines.join('\n').trimEnd();
+}
 
 export function stripDanglingTail(text: string): string {
   const lines = text.trimEnd().split('\n');

@@ -21,7 +21,7 @@ import { logger } from '../logger.js';
 import type { EvidenceStore } from '../rag/retriever.js';
 import { publishEvent } from '../redis.js';
 import { type NetworkState, newSourceId } from '../state.js';
-import { assertPublicHost } from './ssrf.js';
+import { fetchWithGuardedRedirects } from './redirects.js';
 import { isUrlAllowed } from './urlPolicy.js';
 
 export interface FetchUrlDeps {
@@ -71,38 +71,28 @@ export function createFetchUrlTool(deps: FetchUrlDeps) {
         data: { tool: 'fetchUrl', args: { url } },
       });
 
-      const parsed = new URL(url);
-      const ssrf = await assertPublicHost(parsed.hostname);
-      if (!ssrf.ok) {
-        throw new AgentError({
-          code: ErrorCode.FetchBlocked,
-          message: ssrf.reason ?? 'ssrf',
-          context: { hostname: parsed.hostname, ip: ssrf.offendingIp },
-        });
-      }
-
       const timeoutSignal = AbortSignal.timeout(env.FETCH_URL_TIMEOUT_MS);
-      let res;
-      try {
-        res = await fetch(url, {
-          method: 'GET',
-          headers: {
-            'user-agent': UA,
-            accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.5',
-            'accept-language': 'en-US,en;q=0.9',
-          },
-          signal: anyAbortSignal([deps.signal, timeoutSignal]),
-          redirect: 'follow',
-        });
-      } catch (err) {
-        const msg = (err as Error).message;
+      const guarded = await fetchWithGuardedRedirects(url, {
+        fetchFn: fetch as never,
+        headers: {
+          'user-agent': UA,
+          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.5',
+          'accept-language': 'en-US,en;q=0.9',
+        },
+        signal: anyAbortSignal([deps.signal, timeoutSignal]),
+        maxHops: env.FETCH_MAX_REDIRECTS,
+      }).catch((err) => ({ ok: false as const, blocked: false as const, url, reason: (err as Error).message, hops: 0 }));
+
+      if (!guarded.ok) {
+        const code = guarded.blocked ? ErrorCode.FetchBlocked : ErrorCode.FetchError;
         await publishEvent({
           jobId: deps.jobId,
           phase: Phase.ToolError,
-          data: { tool: 'fetchUrl', code: ErrorCode.FetchError, message: msg, url },
+          data: { tool: 'fetchUrl', code, message: guarded.reason, url: guarded.url, hops: guarded.hops },
         });
-        throw new AgentError({ code: ErrorCode.FetchError, message: msg, cause: err, context: { url } });
+        throw new AgentError({ code, message: guarded.reason, context: { url: guarded.url, hops: guarded.hops } });
       }
+      const res = guarded.response;
 
       if (!res.ok) {
         throw new AgentError({
@@ -126,7 +116,7 @@ export function createFetchUrlTool(deps: FetchUrlDeps) {
       const { title, text } = extractText(html, /html/.test(contentType));
 
       const sourceId = newSourceId();
-      const finalUrl = res.url ?? url;
+      const finalUrl = guarded.finalUrl;
       deps.state.sources.push({ id: sourceId, url: finalUrl, title: title || finalUrl, fetchedAt: new Date().toISOString() });
 
       const { chunkCount, embedded } = await deps.evidence.addSource(sourceId, text);

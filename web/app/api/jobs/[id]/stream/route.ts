@@ -18,6 +18,7 @@ export async function GET(
         ...(lastEventId ? { 'last-event-id': lastEventId } : {}),
       },
       cache: 'no-store',
+      signal: request.signal,
     },
   );
 

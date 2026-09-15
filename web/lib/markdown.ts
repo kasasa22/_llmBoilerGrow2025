@@ -13,8 +13,8 @@ export function normaliseAnswerHtml(html: string): string {
 }
 
 export function renderMarkdown(md: string): string {
+  if (typeof window === 'undefined') return '';
   const raw = normaliseAnswerHtml(marked.parse(md, { async: false }) as string);
-  if (typeof window === 'undefined') return raw;
   return DOMPurify.sanitize(raw, {
     ADD_ATTR: ['target', 'rel'],
   });

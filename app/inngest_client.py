@@ -41,8 +41,6 @@ def send_research_query(
     trace_id: str,
     query: str,
     submitted_at: str,
-    max_steps: int | None = None,
-    model: str | None = None,
 ) -> None:
     """Send the query.submitted event. Non-blocking wrt worker execution."""
     payload: dict[str, Any] = {
@@ -51,11 +49,6 @@ def send_research_query(
         "query": query,
         "submitted_at": submitted_at,
     }
-    if max_steps is not None:
-        payload["max_steps"] = max_steps
-    if model:
-        payload["model"] = model
-
     get_client().send_sync(
         inngest.Event(name=RESEARCH_QUERY_EVENT, data=payload)
     )

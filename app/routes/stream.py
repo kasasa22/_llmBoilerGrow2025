@@ -1,11 +1,12 @@
 """GET /api/jobs/<id>/stream — SSE relay backed by Redis pub/sub.
 
 Flow:
-1. Emit any log-list backfill entries with seq > Last-Event-ID (or all).
-2. If a terminal ``final`` sits in ``job:{id}:final``, publish it and close.
-3. Otherwise subscribe to ``job:{id}:events`` and stream envelopes verbatim.
-4. Emit a keep-alive comment every N seconds so Civo LB idle-timeout
-   (~60s) doesn't kill the connection.
+1. Subscribe to ``job:{id}:events`` first so nothing published during the
+   replay is lost (duplicates are dropped by seq).
+2. Emit any log-list backfill entries with seq > Last-Event-ID (or all).
+3. If a terminal ``final`` sits in ``job:{id}:final``, publish it and close.
+4. Otherwise stream live envelopes verbatim, with a keep-alive comment every
+   N seconds so Civo LB idle-timeout (~60s) doesn't kill the connection.
 
 Assumes gevent-patched sockets so ``pubsub.get_message`` yields the greenlet.
 """
@@ -70,38 +71,37 @@ def _generate(*, job_id: str, last_seq: int) -> Iterator[bytes]:
     seen_seqs: set[int] = set()
     terminal_replayed = False
 
-    for entry in bus.get_log_tail(job_id=job_id, max_entries=cfg.sse_replay_max):
-        try:
-            envelope = decode_envelope(entry)
-        except ValueError:
-            continue
-        if envelope.phase in ("done", "error") and envelope.data.get("terminal") is not False:
-            terminal_replayed = True
-        if envelope.seq is not None and envelope.seq <= last_seq:
-            continue
-        if envelope.seq is not None:
-            seen_seqs.add(envelope.seq)
-        yield _to_sse(envelope.raw, envelope.phase, envelope.seq)
-
-    final_raw = bus.get_final(job_id)
-    if final_raw:
-        try:
-            envelope = decode_envelope(final_raw)
-            if envelope.seq is None or envelope.seq not in seen_seqs:
-                yield _to_sse(envelope.raw, envelope.phase, envelope.seq)
-            if not terminal_replayed:
-                yield _to_sse(_synthetic_done_payload(job_id), "done", None)
-            return
-        except ValueError:
-            log.warning("stream.final.decode_failed", extra={"job_id": job_id})
-
-    if terminal_replayed:
-        return
-
-    # Live subscribe. Use pubsub with a poll timeout so we can emit keepalives.
     pubsub = bus._pubsub_client.pubsub(ignore_subscribe_messages=True)  # noqa: SLF001
     pubsub.subscribe(job_events_channel(job_id))
     try:
+        for entry in bus.get_log_tail(job_id=job_id, max_entries=cfg.sse_replay_max):
+            try:
+                envelope = decode_envelope(entry)
+            except ValueError:
+                continue
+            if envelope.phase in ("done", "error") and envelope.data.get("terminal") is not False:
+                terminal_replayed = True
+            if envelope.seq is not None and envelope.seq <= last_seq:
+                continue
+            if envelope.seq is not None:
+                seen_seqs.add(envelope.seq)
+            yield _to_sse(envelope.raw, envelope.phase, envelope.seq)
+
+        final_raw = bus.get_final(job_id)
+        if final_raw:
+            try:
+                envelope = decode_envelope(final_raw)
+                if envelope.seq is None or envelope.seq not in seen_seqs:
+                    yield _to_sse(envelope.raw, envelope.phase, envelope.seq)
+                if not terminal_replayed:
+                    yield _to_sse(_synthetic_done_payload(job_id), "done", None)
+                return
+            except ValueError:
+                log.warning("stream.final.decode_failed", extra={"job_id": job_id})
+
+        if terminal_replayed:
+            return
+
         while True:
             message = pubsub.get_message(timeout=cfg.sse_keepalive_seconds)
             if message is None:

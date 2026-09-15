@@ -10,6 +10,7 @@ import {
   fallbackAnswer,
   finaliseAnswer,
   stripDanglingTail,
+  stripSourceList,
   stripThinking,
   trimToBoundary,
 } from '../src/synthesize.js';
@@ -159,6 +160,21 @@ describe('collapseRepeats', () => {
   it('keeps legitimate distinct markers and code', () => {
     expect(collapseRepeats('A [1][2]. B [2].')).toBe('A [1][2]. B [2].');
     expect(collapseRepeats('Use `x[1][1]` here [1].')).toBe('Use `x[1][1]` here [1].');
+  });
+});
+
+describe('stripSourceList', () => {
+  it('removes a trailing model-written source line', () => {
+    const text = 'SSE pushes updates [1].\n\n- point [1]\n\n[1] Using server-sent events - MDN — https://developer.mozilla.org/x';
+    expect(stripSourceList(text)).toBe('SSE pushes updates [1].\n\n- point [1]');
+  });
+  it('removes a Sources heading with several entries', () => {
+    const text = 'Body [1][2].\n\n**Sources:**\n- [1] A — https://a.example/\n- [2] B — https://b.example/';
+    expect(stripSourceList(text)).toBe('Body [1][2].');
+  });
+  it('leaves a plain Sources heading alone when nothing follows it and keeps inline links', () => {
+    expect(stripSourceList('See https://a.example/ for details [1].')).toBe('See https://a.example/ for details [1].');
+    expect(stripSourceList('Body.\n\n### Sources')).toBe('Body.\n\n### Sources');
   });
 });
 

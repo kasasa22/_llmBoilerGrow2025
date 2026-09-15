@@ -57,7 +57,6 @@ const Schema = z.object({
   NETWORK_MIN_CLAIMS: z.coerce.number().int().positive().default(3),
   NETWORK_MAX_ANALYSIS_ITERS: z.coerce.number().int().positive().default(2),
   NETWORK_MAX_CALLS: z.coerce.number().int().positive().default(12),
-  NETWORK_WALL_CLOCK_MS: z.coerce.number().int().positive().default(120_000),
   SKIP_ANALYSIS: bool().default(false),
   SKIP_SYNTHESIS_AGENT: bool().default(false),
 
@@ -89,6 +88,7 @@ const Schema = z.object({
   // Search / fetch
   FETCH_URL_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   FETCH_URL_MAX_BYTES: z.coerce.number().int().positive().default(1_048_576),
+  FETCH_MAX_REDIRECTS: z.coerce.number().int().min(0).max(10).default(5),
   SEARCH_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   SEARCH_RESULTS: z.coerce.number().int().min(1).max(8).default(5),
   SEARCH_SNIPPET_CHARS: z.coerce.number().int().positive().default(160),

@@ -709,7 +709,23 @@ body {
   background: #fee2e2;
   border: 1px solid var(--error);
   color: #991b1b;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
+.banner-action {
+  background: #fff;
+  border: 1px solid var(--error);
+  color: #991b1b;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.banner-action:hover { background: #fecaca; }
 
 /* ------ Timeline details (dev section) ------ */
 .timeline-details {

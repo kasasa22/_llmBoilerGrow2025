@@ -2,7 +2,7 @@
 
 Contract (see plan B1 Idempotency for the full spec):
 
-- Body: ``{"query": str, "max_steps"?: int, "model"?: str}``.
+- Body: ``{"query": str}``.
 - Optional header ``Idempotency-Key: <8..128 chars, [A-Za-z0-9._~-]>``.
 - 202 on fresh: ``{job_id, stream_url, status_url, idempotent: false}``.
 - 200 on dedup hit: same body with ``idempotent: true`` + header
@@ -68,14 +68,6 @@ def submit_chat():
     if len(query) > cfg.request_max_query_chars:
         return _err(400, "bad_request", f"'query' exceeds {cfg.request_max_query_chars} chars", trace_id)
 
-    max_steps = payload.get("max_steps")
-    if max_steps is not None and (not isinstance(max_steps, int) or max_steps <= 0 or max_steps > 20):
-        return _err(400, "bad_request", "'max_steps' must be an int in [1, 20]", trace_id)
-
-    model = payload.get("model")
-    if model is not None and (not isinstance(model, str) or not model.strip()):
-        return _err(400, "bad_request", "'model' must be a non-empty string when provided", trace_id)
-
     idem_header = request.headers.get("Idempotency-Key")
     if idem_header is not None and not is_valid_idempotency_key(idem_header):
         return _err(400, "invalid_idempotency_key", "Idempotency-Key must match ^[A-Za-z0-9._~-]{8,128}$", trace_id)
@@ -92,17 +84,25 @@ def submit_chat():
         ttl_seconds=cfg.idempotency_ttl_seconds,
     )
 
-    if not fresh:
+    if not fresh and existing_job is None:
+        bus.release_request_hash(request_hash)
+        fresh, existing_job, existing_body = bus.try_claim_request_hash(
+            request_hash=request_hash,
+            job_id=provisional_job_id,
+            body_sha=body_hash,
+            ttl_seconds=cfg.idempotency_ttl_seconds,
+        )
+
+    if not fresh and existing_job is not None:
         if idem_header and existing_body and existing_body != body_hash:
             return _err(409, "idempotency_key_reuse",
                         "Idempotency-Key already used for a different request",
                         trace_id, extra_headers={"Idempotency-Status": "conflict"})
 
-        job_id = existing_job or provisional_job_id
-        JOB_ID_VAR.set(job_id)
-        log.info("chat.dedup.hit", extra={"job_id": job_id, "request_hash": request_hash})
+        JOB_ID_VAR.set(existing_job)
+        log.info("chat.dedup.hit", extra={"job_id": existing_job, "request_hash": request_hash})
         return _job_response(
-            job_id=job_id, trace_id=trace_id, http_status=200,
+            job_id=existing_job, trace_id=trace_id, http_status=200,
             idempotent=True, idempotency_status="replayed",
         )
 
@@ -117,7 +117,7 @@ def submit_chat():
             "trace_id": trace_id,
             "request_hash": request_hash,
             "created_at": submitted_at,
-            "model": model or cfg.model_name,
+            "model": cfg.model_name,
         },
         ttl_seconds=cfg.job_status_ttl_seconds,
     )
@@ -128,11 +128,10 @@ def submit_chat():
             trace_id=trace_id,
             query=query,
             submitted_at=submitted_at,
-            max_steps=max_steps,
-            model=model,
         )
-    except Exception:  # pragma: no cover - upstream network failure
+    except Exception:
         log.exception("chat.inngest.dispatch_failed", extra={"job_id": job_id})
+        bus.release_request_hash(request_hash)
         bus.set_status(job_id, {"state": "failed", "terminal_reason": "dispatch"}, cfg.job_status_ttl_seconds)
         return _err(502, "dispatch_failed", "could not enqueue research job", trace_id)
 

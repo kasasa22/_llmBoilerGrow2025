@@ -32,7 +32,6 @@ env:
   INNGEST_BASE_URL: "http://inngest.inngest.svc.cluster.local:8288"
 
   NETWORK_MAX_CALLS: "6"
-  NETWORK_WALL_CLOCK_MS: "240000"
   NETWORK_MIN_SOURCES: "1"
   NETWORK_MIN_EVIDENCE: "1"
   NETWORK_MIN_CLAIMS: "1"

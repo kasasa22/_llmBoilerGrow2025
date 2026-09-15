@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     log_include_stack: bool = False
 
     ollama_base_url: str = Field(default_factory=_default_ollama_base_url)
-    model_name: str = "qwen3:8b"
+    model_name: str = "qwen2.5:7b"
 
     redis_url: str = "redis://localhost:6379/0"
 

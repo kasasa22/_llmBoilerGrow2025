@@ -125,6 +125,9 @@ class RedisBus:
         existing_body = self._client.get(body_key)
         return False, existing_job, existing_body
 
+    def release_request_hash(self, request_hash: str) -> None:
+        self._client.delete(job_hash_key(request_hash), job_hash_body_key(request_hash))
+
     # ---- final replay --------------------------------------------------
     def get_final(self, job_id: str) -> str | None:
         return self._client.get(job_final_key(job_id))

@@ -54,7 +54,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
   const getIdempotencyKey = useIdempotencyKey();
   const history = useQueryHistory();
 
-  const { events, status } = useJobStream(streamUrl, {
+  const { events, status, error: streamError, reconnect } = useJobStream(streamUrl, {
     onFinal: (data: FinalData) =>
       setFinal({
         answer: data.answer,
@@ -243,7 +243,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
               </div>
             </section>
 
-            <ErrorBanner message={error} />
+            <ErrorBanner message={error ?? streamError} onRetry={streamError ? reconnect : undefined} />
 
             {activeQuery ? (
               <section className="query-echo">
@@ -284,7 +284,7 @@ export function ChatPanel({ modelName, env }: ChatPanelProps) {
               </section>
             ) : null}
 
-            {streamEndedWithoutAnswer && !final.answer ? (
+            {streamEndedWithoutAnswer && !final.answer && !streamError ? (
               <section className="answer answer--empty">
                 <div className="answer-waiting">
                   <div>

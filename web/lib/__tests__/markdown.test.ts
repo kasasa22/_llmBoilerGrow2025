@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { normaliseAnswerHtml, renderMarkdown } from '@/lib/markdown';
 
@@ -32,5 +32,15 @@ describe('renderMarkdown', () => {
 
   it('keeps citation markers as text', () => {
     expect(renderMarkdown('Fast [1].')).toContain('Fast [1].');
+  });
+
+  it('renders nothing on the server so unsanitised HTML never reaches SSR output', () => {
+    const original = globalThis.window;
+    vi.stubGlobal('window', undefined);
+    try {
+      expect(renderMarkdown('<img src=x onerror=alert(1)> **bold**')).toBe('');
+    } finally {
+      vi.stubGlobal('window', original);
+    }
   });
 });

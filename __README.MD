@@ -1,9 +1,16 @@
 # Civo LLM Boilerplate — Async Research Agent
 
 > A production-shaped implementation of the Grow Factory assessment brief.
-> Flask API + Inngest AgentKit multi-agent Network (Research → Analysis →
-> Synthesis) over self-hosted Ollama, on a Civo GPU Kubernetes cluster.
-> SSE streaming, hybrid RAG, idempotent job dedup, full observability.
+> Flask API + Inngest AgentKit agent network over self-hosted Ollama on a Civo
+> Kubernetes cluster. SSE streaming, per-job RAG, idempotent job dedup, full
+> observability.
+>
+> **What actually runs on the live CPU deployment:** a ResearchAgent (web search +
+> fetch, inside an AgentKit network) followed by a direct synthesis completion.
+> The full Research → Analysis → Synthesis three-agent network is built and
+> tested, but the Analysis and Synthesis agents are switched off on the 4 vCPU
+> node (`SKIP_ANALYSIS`, `SKIP_SYNTHESIS_AGENT`) because each extra model call
+> costs a minute or more there. [ADR-010](docs/adr/010-single-step-network-and-direct-synthesis.md) has the reasoning.
 
 Forked from `growAssignments/_llmBoilerGrow2025` — upstream commits preserved.
 
@@ -177,7 +184,7 @@ Each agent runs a dynamic system prompt rebuilt per turn from the current `Netwo
 5. **One tool call per turn.** No prose. When the goal is met or the budget is exhausted, reply `DONE`.
 6. **The prompt shows remaining budget** (`webSearch calls left: N`, `fetchUrl calls left: M`) and **already-fetched URLs** so the model plans within actual constraints — not hallucinated ones.
 
-The SynthesisAgent follows a parallel policy: produce a markdown answer 200-500 words, cite inline with `[n]`, structure comparison answers as a markdown table, and **always** call `submitAnswer` (never emit plain text — that's the only clean exit).
+Synthesis (the direct completion on CPU, or the SynthesisAgent on GPU) follows the same policy: a markdown answer of 120-250 words, one direct opening sentence, inline `[n]` citations that map to the numbered source list, and for comparison questions a recommendation paragraph followed by a table. Citations are always derived from the pages the agent actually fetched; a URL the model invents can never appear as a link.
 
 Router transitions (all thresholds env-tunable via `NETWORK_MIN_*` / `NETWORK_MAX_*`):
 
@@ -191,43 +198,33 @@ Model: `qwen2.5:3b` on the Civo CPU node (Terraform `cpu_model_name`), `qwen2.5:
 
 ### Network state machine
 
+Thresholds shown are the deployed CPU values (`NETWORK_MIN_SOURCES=1`, `NETWORK_MIN_EVIDENCE=1`, `MAX_WALL_CLOCK_MS=240000`, both skip flags on). The dashed analysis and synthesis-agent states only run when the skip flags are off (GPU profile).
+
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> research
 
-    research --> research: sources lt 3 or evidence lt 4
-    research --> analysis: sources gte 3 AND evidence gte 4
+    research --> research: sources lt 1 or evidence lt 1
+    research --> direct_synthesis: ready AND SKIP_SYNTHESIS_AGENT
+    research --> analysis: ready AND no skip flags
+    research --> synthesis_agent: ready AND SKIP_ANALYSIS only
 
-    analysis --> analysis: claims lt 3 AND iter lt 2
-    analysis --> synthesis: claims gte 3 OR iter gte 2
+    analysis --> analysis: claims lt min AND iter lt max
+    analysis --> synthesis_agent: claims gte min OR iter gte max
 
-    synthesis --> synthesis: not finalAnswer
-    synthesis --> done_ok: submitAnswer called
+    synthesis_agent --> done_ok: submitAnswer called
+    synthesis_agent --> direct_synthesis: exits without submitAnswer
+
+    direct_synthesis --> done_ok: answer written (partial if cut short)
 
     done_ok --> [*]
 
     state guard_check <<choice>>
-    research --> guard_check: post-step check
-    analysis --> guard_check: post-step check
-    synthesis --> guard_check: post-step check
-
-    guard_check --> terminated_budget: BUDGET_EXCEEDED
-    guard_check --> terminated_wallclock: elapsed gte 120s
-    guard_check --> terminated_errors: errors.length gte 3
-    guard_check --> terminated_calls: callCount gte 12
-
-    terminated_budget --> [*]
-    terminated_wallclock --> [*]
-    terminated_errors --> [*]
-    terminated_calls --> [*]
-
-    note right of guard_check
-      Evaluated after every
-      agent step at any phase.
-      Budget path forces one
-      synthesis call, then exits.
-    end note
+    research --> guard_check: after every step
+    guard_check --> direct_synthesis: budget, wall clock (240s), errors gte 3 or calls gte 6, with sources gt 0
+    guard_check --> no_answer: same, with zero sources
+    no_answer --> [*]
 ```
 
 ## Quickstart — local
@@ -484,6 +481,15 @@ On the worker side, `SETNX job:{id}:lock` prevents double execution; a Lua CAS l
 fresh worker take over a stale lock. Every SSE event carries a monotonic `seq` so
 `Last-Event-ID` reconnection is deterministic. Details in [ADR-007](docs/adr/007-idempotency-strategy-outbox-lite.md).
 
+## Operating assumptions
+
+Stated so a reviewer does not have to infer them:
+
+- **No authentication or rate limiting** on the public load balancers. This is a graded demo; anyone with the IP can submit queries and open the Inngest dashboard. A production deployment would put both behind an ingress with auth.
+- **One query runs at a time.** `WORKER_CONCURRENCY=1`, Inngest `concurrency: 1` and `OLLAMA_NUM_PARALLEL=1` are deliberate: the 4 vCPU node cannot serve two model calls at once without both slowing to a crawl, and one slot keeps Ollama's prefix cache useful. A second query queues in Inngest and starts when the first finishes.
+- **One token cap for agent turns and the answer.** `MAX_TOKENS_PER_CALL` (450) bounds both. Agent turns are short tool calls that never approach it, so in practice it only sets the answer length.
+- **Every request costs 2-5 minutes of the node.** Budgets (`MAX_WALL_CLOCK_MS`, `SYNTHESIS_TIMEOUT_MS`) bound the worst case; the UI gives up after 10 minutes of silence and offers a reconnect.
+
 ## Cost controls
 
 Runaway agents burn GPU minutes. Every run is bounded by six env-driven limits
@@ -521,8 +527,9 @@ Idempotency-Key: <optional; 8..128 chars, [A-Za-z0-9._~-]>
 
 **Validation:**
 
-- `query` — required, string, 1..2000 chars after trim.
-- `Idempotency-Key` — optional; if omitted, dedup uses `sha256(normalized_query)`.
+- `query` — required, string, 1..2000 chars after trim. Any other body field is ignored.
+- `Idempotency-Key` — optional; if omitted, dedup uses `sha256(normalized_query)`, so two identical questions within an hour share one job. The Next.js UI sends a per-tab key, which scopes dedup to "this tab retrying" rather than "anyone asking the same thing"; that is intentional so two people can run the same demo query at once.
+- If the Inngest dispatch fails the claim is released immediately and the client gets a 502 it can retry; the query is not blocked for the TTL.
 
 **Responses:**
 
@@ -724,6 +731,10 @@ leaves memory for the rest of the stack, and since ADR-010 the answer is written
 plain completion, so the agent model only has to choose sources. Local docker-compose
 defaults to `qwen2.5:7b`, which is what the sample run above was measured with. Link:
 [ADR-004](docs/adr/004-model-choice-qwen3-8b.md).
+
+### What fetchUrl will and will not fetch
+
+Every hop is checked, not just the URL the model asked for: scheme and domain policy first, then DNS resolution with every A/AAAA record tested against the private, loopback, link-local, carrier-NAT, multicast and IPv4-mapped ranges as CIDR blocks, then a manual-redirect fetch with a five-hop limit that repeats both checks on each `Location`. A page that 302s to a metadata IP or an in-cluster service is refused before the request is made and reported as `FETCH_BLOCKED` with the hop count. Link: [ADR-008](docs/adr/008-ssrf-hardening-in-fetchurl.md).
 
 ### Why in-memory RAG vs pgvector or Qdrant
 

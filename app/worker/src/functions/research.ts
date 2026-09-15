@@ -18,8 +18,6 @@ interface EventData {
   trace_id: string;
   query: string;
   submitted_at: string;
-  max_steps?: number;
-  model?: string;
 }
 
 export interface JobOutcome {
@@ -76,7 +74,7 @@ export const researchFn = inngest.createFunction(
             state: 'running',
             owner: workerOwnerId(),
             started_at: new Date().toISOString(),
-            model: data.model || env.MODEL_NAME,
+            model: env.MODEL_NAME,
           }),
         ),
       );

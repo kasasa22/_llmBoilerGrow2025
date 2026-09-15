@@ -37,8 +37,9 @@ Chosen: **Multi-agent Network** via AgentKit's `createNetwork` + a hybrid router
 
 ### Negative Consequences
 - Extra router prompt = one more failure surface.
-- Token cost is roughly 2.5× a single-agent baseline — capped by `NETWORK_MAX_CALLS=12`
-  and `NETWORK_WALL_CLOCK_MS=120000`.
+- Token cost is roughly 2.5× a single-agent baseline — capped by `NETWORK_MAX_CALLS`
+  and the research-phase clock `MAX_WALL_CLOCK_MS` (the separate `NETWORK_WALL_CLOCK_MS`
+  knob was never read and has been removed).
 
 ## Alternatives Considered
 

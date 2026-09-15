@@ -17,6 +17,12 @@ describe('isPrivateIp', () => {
     ['172.16.0.1'],
     ['172.31.255.255'],
     ['0.0.0.0'],
+    ['127.0.0.2'],
+    ['127.1.1.1'],
+    ['100.64.0.1'],
+    ['100.127.255.254'],
+    ['224.0.0.1'],
+    ['255.255.255.255'],
   ])('flags %s as private (IPv4)', (ip) => {
     expect(isPrivateIp(ip)).toBe(true);
   });
@@ -26,6 +32,14 @@ describe('isPrivateIp', () => {
     ['fc00::1'],
     ['fd00::1'],
     ['fe80::1'],
+    ['fe90::1'],
+    ['febf::1'],
+    ['::'],
+    ['::ffff:10.0.0.1'],
+    ['::ffff:127.0.0.1'],
+    ['::ffff:a9fe:a9fe'],
+    ['64:ff9b::a00:1'],
+    ['ff02::1'],
   ])('flags %s as private (IPv6)', (ip) => {
     expect(isPrivateIp(ip)).toBe(true);
   });
@@ -37,6 +51,11 @@ describe('isPrivateIp', () => {
     ['172.32.0.1'], // just above the /12 range
     ['172.10.0.1'],
     ['2606:4700:4700::1111'], // Cloudflare public v6
+    ['100.63.255.255'],
+    ['100.128.0.1'],
+    ['fec0::1'],
+    ['::ffff:8.8.8.8'],
+    ['64:ff9b::808:808'],
   ])('does NOT flag public %s', (ip) => {
     expect(isPrivateIp(ip)).toBe(false);
   });

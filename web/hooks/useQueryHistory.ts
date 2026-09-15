@@ -37,7 +37,9 @@ export function useQueryHistory() {
     setItems(next);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {}
+    } catch (err) {
+      console.warn('chat history not saved', err);
+    }
   }, []);
 
   const add = useCallback(

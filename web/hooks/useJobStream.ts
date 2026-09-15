@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { FinalData, SseEvent } from '@/lib/events';
+import type { ErrorData, FinalData, SseEvent } from '@/lib/events';
 import { PHASE_NAMES } from '@/lib/phases';
 
 export type StreamStatus =
@@ -23,7 +23,10 @@ export interface UseJobStreamResult {
 export interface UseJobStreamOptions {
   onFinal?: (data: FinalData) => void;
   onDone?: () => void;
+  inactivityMs?: number;
 }
+
+export const DEFAULT_INACTIVITY_MS = 10 * 60 * 1000;
 
 export function useJobStream(
   streamUrl: string | null,
@@ -33,7 +36,6 @@ export function useJobStream(
   const [status, setStatus] = useState<StreamStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const seenSeqRef = useRef<number>(-1);
-  const sourceRef = useRef<EventSource | null>(null);
   const [reconnectTick, setReconnectTick] = useState(0);
   const optsRef = useRef(opts);
   optsRef.current = opts;
@@ -53,21 +55,41 @@ export function useJobStream(
     seenSeqRef.current = -1;
 
     const es = new EventSource(streamUrl);
-    sourceRef.current = es;
+    const inactivityMs = optsRef.current.inactivityMs ?? DEFAULT_INACTIVITY_MS;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let finished = false;
 
-    const handle = (phase: string) => (raw: MessageEvent) => {
+    const finish = (next: StreamStatus, message: string | null) => {
+      if (finished) return;
+      finished = true;
+      if (timer) clearTimeout(timer);
+      setStatus(next);
+      if (message) setError(message);
+      es.close();
+    };
+
+    const armTimer = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const minutes = Math.round(inactivityMs / 60000);
+        finish('error', `No update from the server for ${minutes} minutes. The job may have been lost; try sending the question again.`);
+      }, inactivityMs);
+    };
+
+    const handle = () => (raw: MessageEvent) => {
       let envelope: SseEvent | null = null;
       try {
         envelope = JSON.parse(raw.data) as SseEvent;
       } catch {
         return;
       }
-      if (!envelope) return;
+      if (!envelope || finished) return;
       const seq = envelope.seq;
       if (typeof seq === 'number') {
         if (seq <= seenSeqRef.current) return;
         seenSeqRef.current = seq;
       }
+      armTimer();
       setStatus('open');
       setEvents((prev) => [...prev, envelope!]);
 
@@ -76,24 +98,30 @@ export function useJobStream(
       }
       if (envelope.phase === 'done') {
         optsRef.current.onDone?.();
-        setStatus('closed');
-        es.close();
+        finish('closed', null);
       }
-      void phase;
+      if (envelope.phase === 'error' && (envelope.data as ErrorData & { terminal?: boolean }).terminal === true) {
+        const data = envelope.data as ErrorData;
+        finish('error', `The agent stopped with ${data.code}: ${data.message}`);
+      }
     };
 
     for (const phase of PHASE_NAMES) {
-      es.addEventListener(phase, handle(phase) as EventListener);
+      es.addEventListener(phase, handle() as EventListener);
     }
 
-    es.onopen = () => setStatus('open');
+    es.onopen = () => {
+      if (!finished) setStatus('open');
+    };
     es.onerror = () => {
+      if (finished) return;
       setStatus((prev) => (prev === 'closed' ? prev : 'reconnecting'));
     };
+    armTimer();
 
     return () => {
+      if (timer) clearTimeout(timer);
       es.close();
-      sourceRef.current = null;
     };
   }, [streamUrl, reconnectTick]);
 

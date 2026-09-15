@@ -1,6 +1,6 @@
 # 008. SSRF hardening in fetchUrl
 
-- Status: Accepted
+- Status: Accepted (amended 2026-09-15: redirects are now followed manually with the policy and DNS checks repeated per hop, and the private-range test uses CIDR arithmetic rather than string prefixes; see `app/worker/src/tools/redirects.ts`)
 - Date: 2026-09-14
 - Deciders: Trevor Kasasa
 - Tags: security
